@@ -1,0 +1,53 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Build files
+build/
+dist/
+out/
+.next/
+*.bundle.js
+*.min.js
+*.min.css
+
+# TypeScript cache
+tsconfig.tsbuildinfo
+
+# Package manager lock files (keep only package-lock.json for npm)
+bun.lock
+bun.lockb
+pnpm-lock.yaml
+pnpm-workspace.yaml
+yarn.lock
+
+# Build artifacts and worktree directories (managed by preview API)
+.threads
+.threads/
+.last_install_check

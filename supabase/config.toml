@@ -1,0 +1,26 @@
+[project]
+project_id = "d0f0c464-46bc-4c91-8882-57a401f06c71"
+# User's Supabase project where edge functions are deployed
+ref = "aziandtcipmaphviocgz"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[functions.meeting-intelligence]
+verify_jwt = false
+
+[functions.product-documentation]
+verify_jwt = false
+
+[functions.release-communications]
+verify_jwt = false
+
+[functions.prioritization]
+verify_jwt = false
+
+[functions.pm-advisor]
+verify_jwt = false
