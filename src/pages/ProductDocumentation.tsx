@@ -23,10 +23,27 @@ import { callPMAdvisorAgent, fetchContextArtifacts, saveAdvisorReview } from '@/
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 
+// Lightweight row type for project_artifacts
+type ProjectArtifactRow = {
+  id: string;
+  created_at: string;
+  project_id: string;
+  project_name: string;
+  artifact_type: string;
+  artifact_name: string | null;
+  input_data: Record<string, any> | null;
+  output_data: string | null;
+  metadata: Record<string, any> | null;
+  advisor_feedback: string | null;
+  advisor_reviewed_at: string | null;
+  status: 'active' | 'archived' | 'deleted';
+};
+
 export default function ProductDocumentation() {
   const navigate = useNavigate();
   const { activeProject } = useActiveProject();
   const [isGenerating, setIsGenerating] = useState(false);
+
   const [formData, setFormData] = useState<DocumentationFormData>({
     problem_statement: '',
     target_user_persona: '',
@@ -42,6 +59,7 @@ export default function ProductDocumentation() {
     target_timeline: '',
     epic_impact: '',
   });
+
   const [selectedOutputs, setSelectedOutputs] = useState<string[]>([]);
   const [currentOutput, setCurrentOutput] = useState<string>('');
   const [sessionHistory, setSessionHistory] = useState<DocumentationSession[]>([]);
@@ -50,7 +68,7 @@ export default function ProductDocumentation() {
   // PM Advisor state
   const [advisorOutput, setAdvisorOutput] = useState<string>('');
   const [isRunningAdvisor, setIsRunningAdvisor] = useState(false);
-  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null); // UUID artifact id
 
   // Error state
   const [error, setError] = useState<string | null>(null);
@@ -59,20 +77,60 @@ export default function ProductDocumentation() {
   // Load session history when active project changes
   useEffect(() => {
     if (activeProject) {
-      loadSessionHistory();
+      void loadSessionHistory();
+    } else {
+      setSessionHistory([]);
+      setIsLoadingHistory(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject]);
+
+  const artifactToDocumentationSession = (a: ProjectArtifactRow): DocumentationSession => {
+    const input = (a.input_data ?? {}) as Record<string, any>;
+    const metadata = (a.metadata ?? {}) as Record<string, any>;
+
+    // The session model your UI expects. We derive it from input_data.
+    return {
+      id: a.id as any, // in case your DocumentationSession.id is typed as number; better to update it to string later
+      created_at: a.created_at,
+
+      problem_statement: input.problem_statement ?? '',
+      target_user_persona: input.target_user_persona ?? '',
+      business_goals: input.business_goals ?? '',
+      assumptions_constraints: input.assumptions_constraints ?? '',
+      functional_requirements: input.functional_requirements ?? '',
+      dependencies: input.dependencies ?? '',
+
+      non_functional_requirements: input.non_functional_requirements ?? '',
+      user_pain_points: input.user_pain_points ?? '',
+      competitive_context: input.competitive_context ?? '',
+      technical_constraints: input.technical_constraints ?? '',
+      success_metrics: input.success_metrics ?? '',
+      target_timeline: input.target_timeline ?? '',
+      epic_impact: input.epic_impact ?? '',
+
+      selected_outputs: input.selected_outputs ?? [],
+      output: a.output_data ?? '',
+      project_id: a.project_id ?? null,
+      module_type: metadata.module_type ?? 'product_documentation',
+    } as any;
+  };
 
   const loadSessionHistory = async () => {
     if (!activeProject) return;
     try {
       setIsLoadingHistory(true);
-      const sessions = await supabaseFetch<DocumentationSession[]>(
-        `/documentation_sessions?project_id=eq.${activeProject.id}&order=created_at.desc&limit=20`
+
+      const artifacts = await supabaseFetch<ProjectArtifactRow[]>(
+        `/project_artifacts?project_id=eq.${activeProject.id}` +
+          `&artifact_type=eq.product_documentation` +
+          `&status=eq.active` +
+          `&order=created_at.desc&limit=20`
       );
-      setSessionHistory(sessions);
-    } catch (error) {
-      console.error('Error loading session history:', error);
+
+      setSessionHistory((artifacts ?? []).map(artifactToDocumentationSession));
+    } catch (err) {
+      console.error('Error loading session history:', err);
       toast.error('Failed to load session history');
     } finally {
       setIsLoadingHistory(false);
@@ -80,15 +138,11 @@ export default function ProductDocumentation() {
   };
 
   const handleInputChange = (field: keyof DocumentationFormData, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+    setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const toggleOutput = (output: string) => {
-    setSelectedOutputs(prev =>
-      prev.includes(output)
-        ? prev.filter(o => o !== output)
-        : [...prev, output]
-    );
+    setSelectedOutputs((prev) => (prev.includes(output) ? prev.filter((o) => o !== output) : [...prev, output]));
   };
 
   const isFormValid = () => {
@@ -100,11 +154,10 @@ export default function ProductDocumentation() {
       'functional_requirements',
       'dependencies',
     ];
-    return requiredFields.every(field => formData[field].trim() !== '') && selectedOutputs.length > 0;
+    return requiredFields.every((field) => formData[field].trim() !== '') && selectedOutputs.length > 0;
   };
 
   const handleGenerate = async () => {
-    // Clear previous error
     setError(null);
 
     if (!isFormValid()) {
@@ -130,50 +183,65 @@ export default function ProductDocumentation() {
     });
 
     try {
+      const payload = {
+        project_id: activeProject.id,
+        project_name: activeProject.name,
+        ...formData,
+        selected_outputs: selectedOutputs,
+      };
+
       const result = await callAgentWithLogging(
         'Product Documentation',
         'product-documentation',
-        {
-          ...formData,
-          selected_outputs: selectedOutputs,
-        },
-        () => generateDocumentation({
-          ...formData,
-          selected_outputs: selectedOutputs,
-        })
+        payload,
+        () =>
+          generateDocumentation({
+            // If generateDocumentation input type doesn’t include project_id, update it.
+            ...(payload as any),
+          })
       );
 
       console.log('✨ [Success] Received AI-generated documentation', { outputLength: result.output.length });
 
-      // Save to database with project_id
-      console.log('💾 [Database] Saving to documentation_sessions table...');
-      const savedSessions = await supabaseFetch<DocumentationSession[]>(
-        '/documentation_sessions',
-        {
-          method: 'POST',
-          body: JSON.stringify({
+      // Save to project_artifacts (canonical store)
+      console.log('💾 [Database] Saving to project_artifacts table...');
+      const artifactName = `PRD: ${formData.problem_statement.slice(0, 60).trim()}${formData.problem_statement.length > 60 ? '…' : ''}`;
+
+      const saved = await supabaseFetch<ProjectArtifactRow[]>('/project_artifacts', {
+        method: 'POST',
+        body: JSON.stringify({
+          project_id: activeProject.id,
+          project_name: activeProject.name,
+          artifact_type: 'product_documentation',
+          artifact_name: artifactName,
+          input_data: {
             ...formData,
             selected_outputs: selectedOutputs,
-            output: result.output,
-            project_id: activeProject.id,
+          },
+          output_data: result.output,
+          metadata: {
             module_type: 'product_documentation',
-          }),
-        }
-      );
+          },
+          status: 'active',
+        }),
+      });
+
       console.log('💾 [Database] Saved successfully');
 
       setCurrentOutput(result.output);
-      // Store the session ID for advisor review
-      if (savedSessions && savedSessions.length > 0) {
-        setCurrentSessionId(savedSessions[0].id);
-      }
-      toast.success('Documentation generated successfully!');
+      setAdvisorOutput(''); // reset advisor for the new artifact
 
-      // Reload history
+      if (saved && saved.length > 0) {
+        setCurrentSessionId(saved[0].id); // artifact UUID
+      } else {
+        setCurrentSessionId(null);
+      }
+
+      toast.success('Documentation generated successfully!');
       await loadSessionHistory();
-    } catch (error: any) {
-      console.error('💥 [Error Handler] Caught error:', error);
-      const errorMessage = parseErrorMessage(error);
+    } catch (err: any) {
+      console.error('💥 [Error Handler] Caught error:', err);
+      const errorMessage = parseErrorMessage(err);
       setError(errorMessage);
       toast.error(errorMessage, { duration: 5000 });
     } finally {
@@ -183,7 +251,6 @@ export default function ProductDocumentation() {
   };
 
   const handleRunAdvisorReview = async () => {
-    // Clear previous error
     setAdvisorError(null);
 
     if (!currentOutput) {
@@ -204,48 +271,37 @@ export default function ProductDocumentation() {
     console.log('👤 [User Action] Clicked "Run PM Advisor Review" button');
 
     try {
-      // Fetch context artifacts from other modules
       console.log('🔍 [Context] Fetching context artifacts from other modules...');
       const contextArtifacts = await fetchContextArtifacts(activeProject.id);
 
-      // Call PM Advisor agent
+      const advisorPayload = {
+        artifact_output: currentOutput,
+        module_type: 'product_documentation',
+        project_id: activeProject.id,
+        project_name: activeProject.name,
+        source_session_table: 'project_artifacts',
+        source_session_id: currentSessionId, // artifact UUID
+        artifact_type: 'PRD',
+        selected_outputs: selectedOutputs,
+        context_artifacts: contextArtifacts,
+      };
+
       const advisorResult = await callAgentWithLogging(
         'PM Advisor (Documentation Review)',
         'pm-advisor',
-        {
-          artifact_output: currentOutput,
-          module_type: 'product_documentation',
-          project_id: activeProject.id,
-          project_name: activeProject.name,
-          source_session_table: 'documentation_sessions',
-          source_session_id: currentSessionId,
-          artifact_type: 'PRD',
-          selected_outputs: selectedOutputs,
-          context_artifacts: contextArtifacts,
-        },
-        () => callPMAdvisorAgent({
-          artifact_output: currentOutput,
-          module_type: 'product_documentation',
-          project_id: activeProject.id,
-          project_name: activeProject.name,
-          source_session_table: 'documentation_sessions',
-          source_session_id: currentSessionId,
-          artifact_type: 'PRD',
-          selected_outputs: selectedOutputs,
-          context_artifacts: contextArtifacts,
-        })
+        advisorPayload,
+        () => callPMAdvisorAgent(advisorPayload as any)
       );
 
       console.log('✨ [Success] Received PM Advisor review', { outputLength: advisorResult.output.length });
       setAdvisorOutput(advisorResult.output);
 
-      // Save advisor review to database
       console.log('💾 [Database] Saving PM Advisor review...');
       await saveAdvisorReview(
         activeProject.id,
         activeProject.name,
         'product_documentation',
-        'documentation_sessions',
+        'project_artifacts',
         currentSessionId,
         'PRD',
         { selected_outputs: selectedOutputs, reviewed_at: new Date().toISOString() },
@@ -253,19 +309,19 @@ export default function ProductDocumentation() {
         advisorResult.output,
         {
           context_available: {
-            documentation: !!contextArtifacts.documentation_sessions,
-            meeting: !!contextArtifacts.meeting_sessions,
-            prioritization: !!contextArtifacts.prioritization_sessions,
-            release: !!contextArtifacts.release_sessions,
+            documentation: !!(contextArtifacts as any)?.documentation_sessions,
+            meeting: !!(contextArtifacts as any)?.meeting_sessions,
+            prioritization: !!(contextArtifacts as any)?.prioritization_sessions,
+            release: !!(contextArtifacts as any)?.release_sessions,
           },
         }
       );
-      console.log('💾 [Database] PM Advisor review saved successfully');
 
+      console.log('💾 [Database] PM Advisor review saved successfully');
       toast.success('PM Advisor review complete');
-    } catch (error: any) {
-      console.error('💥 [Error Handler] Caught error:', error);
-      const errorMessage = parseErrorMessage(error);
+    } catch (err: any) {
+      console.error('💥 [Error Handler] Caught error:', err);
+      const errorMessage = parseErrorMessage(err);
       setAdvisorError(errorMessage);
       toast.error(errorMessage, { duration: 5000 });
     } finally {
@@ -278,7 +334,7 @@ export default function ProductDocumentation() {
     try {
       await navigator.clipboard.writeText(currentOutput);
       toast.success('Copied to clipboard!');
-    } catch (error) {
+    } catch (err) {
       toast.error('Failed to copy to clipboard');
     }
   };
@@ -287,7 +343,7 @@ export default function ProductDocumentation() {
     try {
       await navigator.clipboard.writeText(advisorOutput);
       toast.success('Advisor review copied to clipboard!');
-    } catch (error) {
+    } catch (err) {
       toast.error('Failed to copy advisor review to clipboard');
     }
   };
@@ -308,9 +364,10 @@ export default function ProductDocumentation() {
       target_timeline: session.target_timeline || '',
       epic_impact: session.epic_impact || '',
     });
-    setSelectedOutputs(session.selected_outputs);
-    setCurrentOutput(session.output || '');
-    setCurrentSessionId(session.id);
+    setSelectedOutputs((session as any).selected_outputs || session.selected_outputs || []);
+    setCurrentOutput((session as any).output || session.output || '');
+    setCurrentSessionId((session as any).id?.toString?.() ?? (session as any).id ?? null);
+    setAdvisorOutput('');
     toast.success('Session loaded');
   };
 
@@ -357,7 +414,6 @@ export default function ProductDocumentation() {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Left Panel - Input Form */}
           <div className="lg:col-span-4">
-            {/* Error Display */}
             <ErrorDisplay error={error} onDismiss={() => setError(null)} />
 
             <Card>
@@ -593,23 +649,21 @@ export default function ProductDocumentation() {
             <Card>
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg font-semibold text-[#111827]">Select Outputs to Generate</CardTitle>
-                <CardDescription className="text-sm text-[#6B7280]">
-                  Choose at least one output type
-                </CardDescription>
+                <CardDescription className="text-sm text-[#6B7280]">Choose at least one output type</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
                   {OUTPUT_TYPES.map((output) => (
-                    <div key={output} className="flex items-start space-x-3 rounded-lg border border-[#E5E7EB] p-3 transition-colors hover:bg-[#F9FAFB]">
+                    <div
+                      key={output}
+                      className="flex items-start space-x-3 rounded-lg border border-[#E5E7EB] p-3 transition-colors hover:bg-[#F9FAFB]"
+                    >
                       <Checkbox
                         id={output}
                         checked={selectedOutputs.includes(output)}
                         onCheckedChange={() => toggleOutput(output)}
                       />
-                      <Label
-                        htmlFor={output}
-                        className="cursor-pointer text-sm font-normal leading-tight text-[#374151]"
-                      >
+                      <Label htmlFor={output} className="cursor-pointer text-sm font-normal leading-tight text-[#374151]">
                         {output}
                       </Label>
                     </div>
@@ -618,12 +672,7 @@ export default function ProductDocumentation() {
 
                 <Separator className="my-6 bg-[#E5E7EB]" />
 
-                <Button
-                  className="w-full"
-                  size="lg"
-                  onClick={handleGenerate}
-                  disabled={!isFormValid() || isGenerating}
-                >
+                <Button className="w-full" size="lg" onClick={handleGenerate} disabled={!isFormValid() || isGenerating}>
                   {isGenerating ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -634,7 +683,6 @@ export default function ProductDocumentation() {
                   )}
                 </Button>
 
-                {/* PM Advisor Review Button */}
                 <Button
                   variant="outline"
                   className="w-full mt-3"
@@ -655,14 +703,11 @@ export default function ProductDocumentation() {
                   )}
                 </Button>
 
-                {/* Advisor Error Display */}
                 {advisorError && <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />}
 
                 {!isFormValid() && (
                   <p className="mt-2 text-center text-xs text-[#9CA3AF]">
-                    {selectedOutputs.length === 0
-                      ? 'Select at least one output type'
-                      : 'Fill in all required fields'}
+                    {selectedOutputs.length === 0 ? 'Select at least one output type' : 'Fill in all required fields'}
                   </p>
                 )}
               </CardContent>
@@ -687,11 +732,7 @@ export default function ProductDocumentation() {
                     {currentOutput ? (
                       <div className="space-y-4">
                         <div className="flex justify-end">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={handleCopyToClipboard}
-                          >
+                          <Button variant="outline" size="sm" onClick={handleCopyToClipboard}>
                             <Copy className="mr-2 h-4 w-4" />
                             Copy to Clipboard
                           </Button>
@@ -712,17 +753,12 @@ export default function ProductDocumentation() {
                   </TabsContent>
 
                   <TabsContent value="advisor" className="mt-4">
-                    {/* Advisor Error Display */}
                     <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />
-                    
+
                     {advisorOutput ? (
                       <div className="space-y-4">
                         <div className="flex justify-end">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={handleCopyAdvisorOutput}
-                          >
+                          <Button variant="outline" size="sm" onClick={handleCopyAdvisorOutput}>
                             <Copy className="mr-2 h-4 w-4" />
                             Copy Advisor Review
                           </Button>
@@ -756,7 +792,7 @@ export default function ProductDocumentation() {
                         </div>
                       ) : (
                         <div className="space-y-3 pr-4">
-                          {sessionHistory.map((session) => (
+                          {sessionHistory.map((session: any) => (
                             <Card
                               key={session.id}
                               className="cursor-pointer transition-all duration-200 hover:border-[#3B82F6] hover:shadow-md"
@@ -771,19 +807,19 @@ export default function ProductDocumentation() {
                                   <CheckCircle2 className="h-4 w-4 text-[#10B981]" />
                                 </div>
                                 <CardDescription className="line-clamp-2 text-xs text-[#6B7280]">
-                                  {session.problem_statement.slice(0, 80)}...
+                                  {(session.problem_statement || '').slice(0, 80)}...
                                 </CardDescription>
                               </CardHeader>
                               <CardContent className="pt-0">
                                 <div className="flex flex-wrap gap-1">
-                                  {session.selected_outputs.slice(0, 3).map((output) => (
+                                  {(session.selected_outputs || []).slice(0, 3).map((output: string) => (
                                     <Badge key={output} variant="secondary" className="text-xs">
                                       {output.split(' ')[0]}
                                     </Badge>
                                   ))}
-                                  {session.selected_outputs.length > 3 && (
+                                  {(session.selected_outputs || []).length > 3 && (
                                     <Badge variant="secondary" className="text-xs">
-                                      +{session.selected_outputs.length - 3} more
+                                      +{(session.selected_outputs || []).length - 3} more
                                     </Badge>
                                   )}
                                 </div>

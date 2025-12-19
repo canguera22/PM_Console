@@ -2,6 +2,9 @@ export interface DocumentationSession {
   id: string;
   created_at: string;
   problem_statement: string;
+  updated_at?: string;
+  project_id?: string;
+  module_type?: string;
   target_user_persona: string;
   business_goals: string;
   assumptions_constraints: string;

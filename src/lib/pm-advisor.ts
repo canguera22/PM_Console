@@ -9,11 +9,11 @@ export interface ContextArtifacts {
 
 export interface PMAdvisorInput {
   artifact_output: string;
-  module_type: 'product_documentation' | 'release_communications';
-  project_id: number;
+  module_type: 'product_documentation' | 'release_communications' | 'meeting_intelligence' | 'prioritization';
+  project_id: string;                     // ✅ UUID string
   project_name?: string;
   source_session_table: string;
-  source_session_id?: number | null;
+  source_session_id?: string | null;      // ✅ UUID string
   artifact_type?: string;
   selected_outputs?: string[];
   context_artifacts: ContextArtifacts;
@@ -24,7 +24,7 @@ export interface PMAdvisorResult {
 }
 
 /**
- * Call the PM Advisor Agent to review an artifact
+ * ✅ Call the PM Advisor Agent to review an artifact
  */
 export async function callPMAdvisorAgent(input: PMAdvisorInput): Promise<PMAdvisorResult> {
   const { data, error } = await supabase.functions.invoke('pm-advisor', {
@@ -36,32 +36,31 @@ export async function callPMAdvisorAgent(input: PMAdvisorInput): Promise<PMAdvis
     throw new Error(error.message || 'Failed to get PM advisor feedback');
   }
 
-  return {
-    output: data.output,
-  };
+  return { output: data.output };
 }
 
 /**
- * Fetch context artifacts from all modules for a project
+ * ✅ Fetch context artifacts (using new `project_artifacts` table)
+ * Returns the latest artifact of each type for the given project
  */
-export async function fetchContextArtifacts(projectId: number): Promise<ContextArtifacts> {
+export async function fetchContextArtifacts(projectId: string): Promise<ContextArtifacts> {
   try {
     const [doc, meeting, prio, release] = await Promise.all([
       supabaseFetch<any[]>(
-        `/documentation_sessions?project_id=eq.${projectId}&order=created_at.desc&limit=1`
-      ).then(data => data[0] || null).catch(() => null),
-      
+        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.product_documentation&order=created_at.desc&limit=1`
+      ).then((data) => data[0] || null).catch(() => null),
+
       supabaseFetch<any[]>(
-        `/meeting_sessions?project_id=eq.${projectId}&order=created_at.desc&limit=1`
-      ).then(data => data[0] || null).catch(() => null),
-      
+        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.meeting_intelligence&order=created_at.desc&limit=1`
+      ).then((data) => data[0] || null).catch(() => null),
+
       supabaseFetch<any[]>(
-        `/prioritization_sessions?project_id=eq.${projectId}&order=created_at.desc&limit=1`
-      ).then(data => data[0] || null).catch(() => null),
-      
+        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.prioritization&order=created_at.desc&limit=1`
+      ).then((data) => data[0] || null).catch(() => null),
+
       supabaseFetch<any[]>(
-        `/release_sessions?project_id=eq.${projectId}&order=created_at.desc&limit=1`
-      ).then(data => data[0] || null).catch(() => null),
+        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.release_communications&order=created_at.desc&limit=1`
+      ).then((data) => data[0] || null).catch(() => null),
     ]);
 
     return {
@@ -82,14 +81,14 @@ export async function fetchContextArtifacts(projectId: number): Promise<ContextA
 }
 
 /**
- * Save an advisor review to the database
+ * ✅ Save PM Advisor review as a new artifact in `project_artifacts`
  */
 export async function saveAdvisorReview(
-  projectId: number,
+  projectId: string,
   projectName: string,
   moduleType: string,
   sourceSessionTable: string,
-  sourceSessionId: number | null,
+  sourceSessionId: string | null,
   artifactType: string,
   inputSnapshot: any,
   outputSnapshot: string,
@@ -97,22 +96,27 @@ export async function saveAdvisorReview(
   metadata: any
 ) {
   try {
-    const response = await supabaseFetch<any[]>('/advisor_sessions', {
+    const response = await supabaseFetch<any[]>('/project_artifacts', {
       method: 'POST',
       body: JSON.stringify({
         project_id: projectId,
         project_name: projectName,
-        module_type: moduleType,
-        source_session_table: sourceSessionTable,
-        source_session_id: sourceSessionId,
-        artifact_type: artifactType,
-        input_snapshot: inputSnapshot,
-        output_snapshot: outputSnapshot,
-        advisor_output: advisorOutput,
+        artifact_type: 'pm_advisor_feedback',
+        artifact_name: `${moduleType}_advisor_review`,
+        input_data: {
+          source_table: sourceSessionTable,
+          source_id: sourceSessionId,
+          artifact_type: artifactType,
+          input_snapshot: inputSnapshot,
+          output_snapshot: outputSnapshot,
+        },
+        output_data: advisorOutput,
         metadata,
       }),
     });
-    return response[0];
+
+    console.log('💾 [Database] Advisor review saved:', response?.[0]?.id);
+    return response?.[0];
   } catch (error) {
     console.error('Error saving advisor review:', error);
     throw error;
