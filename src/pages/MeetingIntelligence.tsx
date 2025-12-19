@@ -13,7 +13,7 @@ import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, Loader2, Copy, CheckCircle2 } from 'lucide-react';
 import { analyzeMeeting } from '@/lib/agent';
 import { supabaseFetch } from '@/lib/supabase';
-import { MeetingSession, MEETING_TYPES } from '@/types/meeting';
+import { MeetingSession, MEETING_TYPES, ProjectArtifactRow } from '@/types/meeting';
 import { SampleTranscriptDialog } from '@/components/SampleTranscriptDialog';
 import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
@@ -45,21 +45,46 @@ export default function MeetingIntelligence() {
   // Load session history when active project changes
   useEffect(() => {
     if (activeProject) {
-      loadSessions();
+      void loadSessions();
+    } else {
+      setSessions([]);
+      setIsLoadingSessions(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject]);
+
+  const artifactToMeetingSession = (a: ProjectArtifactRow): MeetingSession => {
+    const input = a.input_data ?? {};
+    return {
+      id: a.id,
+      created_at: a.created_at,
+      meeting_type: (input.meeting_type as string) ?? null,
+      project_name: a.project_name ?? null,
+      participants: (input.participants as string) ?? null,
+      transcript: (input.meeting_transcript as string) ?? '',
+      output: a.output_data ?? null,
+      metadata: (a.metadata ?? {}) as Record<string, any>,
+    };
+  };
 
   const loadSessions = async () => {
     if (!activeProject) return;
 
     try {
       setIsLoadingSessions(true);
-      const data = await supabaseFetch<MeetingSession[]>(
-        `/meeting_sessions?project_id=eq.${activeProject.id}&order=created_at.desc&limit=20`
+
+      // Pull meeting history from project_artifacts
+      const data = await supabaseFetch<ProjectArtifactRow[]>(
+        `/project_artifacts?project_id=eq.${activeProject.id}` +
+          `&artifact_type=eq.meeting_intelligence` +
+          `&status=eq.active` +
+          `&order=created_at.desc` +
+          `&limit=20`
       );
-      setSessions(data);
-    } catch (error) {
-      console.error('Error loading sessions:', error);
+
+      setSessions((data ?? []).map(artifactToMeetingSession));
+    } catch (err) {
+      console.error('Error loading sessions:', err);
       toast({
         title: 'Error',
         description: 'Failed to load session history',
@@ -87,93 +112,100 @@ export default function MeetingIntelligence() {
   };
 
   const handleAnalyze = async () => {
-    // Clear previous error
     setError(null);
 
     if (!transcript.trim()) {
-      const errorMsg = 'Please enter a meeting transcript';
-      setError(errorMsg);
-      toast({
-        title: 'Validation Error',
-        description: errorMsg,
-        variant: 'destructive',
-      });
+      const msg = 'Please enter a meeting transcript';
+      setError(msg);
+      toast({ title: 'Validation Error', description: msg, variant: 'destructive' });
       return;
     }
 
     if (!activeProject) {
-      const errorMsg = 'No active project selected';
-      setError(errorMsg);
-      toast({
-        title: 'Error',
-        description: errorMsg,
-        variant: 'destructive',
-      });
+      const msg = 'No active project selected';
+      setError(msg);
+      toast({ title: 'Error', description: msg, variant: 'destructive' });
       return;
     }
 
     setIsAnalyzing(true);
+
+    const effectiveProjectName = projectName?.trim() || activeProject.name;
+
     console.log('👤 [User Action] Clicked "Analyze Meeting" button');
     console.log('📝 [Input Data]', {
       transcript: transcript.substring(0, 100) + '...',
       transcriptLength: transcript.length,
       meetingType,
-      projectName,
+      projectName: effectiveProjectName,
       participants,
       projectId: activeProject.id,
     });
 
     try {
-      // Call the agent with logging
+      // Call the edge function (project_id REQUIRED)
       const result = await callAgentWithLogging(
         'Meeting Intelligence',
         'meeting-intelligence',
         {
+          project_id: activeProject.id,
+          project_name: effectiveProjectName || undefined,
           meeting_transcript: transcript,
           meeting_type: meetingType || undefined,
-          project_name: projectName || undefined,
           participants: participants || undefined,
         },
-        () => analyzeMeeting({
-          meeting_transcript: transcript,
-          meeting_type: meetingType || undefined,
-          project_name: projectName || undefined,
-          participants: participants || undefined,
-        })
+        () =>
+          analyzeMeeting({
+            project_id: activeProject.id,
+            project_name: effectiveProjectName || undefined,
+            meeting_transcript: transcript,
+            meeting_type: meetingType || undefined,
+            participants: participants || undefined,
+          })
       );
 
       console.log('✨ [Success] Received AI-generated output', { outputLength: result.output.length });
       setCurrentOutput(result.output);
 
-      // Save to database with project_id
-      console.log('💾 [Database] Saving to meeting_sessions table...');
-      await supabaseFetch<MeetingSession[]>('/meeting_sessions', {
+      // Save to project_artifacts (new canonical store)
+      const artifactName =
+        meetingType?.trim()
+          ? `Meeting: ${meetingType.trim()}`
+          : 'Meeting: Analysis';
+
+      console.log('💾 [Database] Saving to project_artifacts table...');
+      await supabaseFetch<ProjectArtifactRow[]>('/project_artifacts', {
         method: 'POST',
         body: JSON.stringify({
-          transcript,
-          meeting_type: meetingType || null,
-          project_name: projectName || null,
-          participants: participants || null,
-          output: result.output,
           project_id: activeProject.id,
-          module_type: 'meeting_intelligence',
-          metadata: {},
+          project_name: effectiveProjectName,
+          artifact_type: 'meeting_intelligence',
+          artifact_name: artifactName,
+          input_data: {
+            meeting_transcript: transcript,
+            meeting_type: meetingType || null,
+            participants: participants || null,
+          },
+          output_data: result.output,
+          metadata: {
+            source: 'meeting-intelligence-ui',
+          },
+          status: 'active',
         }),
       });
+
       console.log('💾 [Database] Saved successfully');
 
-      // Refresh session history
       await loadSessions();
 
       toast({
         title: 'Success',
         description: 'Meeting analyzed successfully',
       });
-    } catch (error: any) {
-      console.error('💥 [Error Handler] Caught error:', error);
+    } catch (err: any) {
+      console.error('💥 [Error Handler] Caught error:', err);
 
-      // Parse error for user-friendly message
-      const errorMessage = parseErrorMessage(error);
+      const errorMessage = parseErrorMessage(err);
       setError(errorMessage);
 
       toast({
@@ -194,17 +226,10 @@ export default function MeetingIntelligence() {
     try {
       await navigator.clipboard.writeText(currentOutput);
       setCopiedToClipboard(true);
-      toast({
-        title: 'Copied!',
-        description: 'Analysis copied to clipboard',
-      });
+      toast({ title: 'Copied!', description: 'Analysis copied to clipboard' });
       setTimeout(() => setCopiedToClipboard(false), 2000);
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: 'Failed to copy to clipboard',
-        variant: 'destructive',
-      });
+    } catch (err) {
+      toast({ title: 'Error', description: 'Failed to copy to clipboard', variant: 'destructive' });
     }
   };
 
@@ -242,9 +267,7 @@ export default function MeetingIntelligence() {
               <Separator orientation="vertical" className="h-6" />
               <div>
                 <h1 className="text-xl font-semibold text-[#111827]">Meeting Intelligence</h1>
-                <p className="text-sm text-[#6B7280]">
-                  AI-powered meeting analysis
-                </p>
+                <p className="text-sm text-[#6B7280]">AI-powered meeting analysis</p>
               </div>
             </div>
             <ActiveProjectSelector />
@@ -267,9 +290,8 @@ export default function MeetingIntelligence() {
       <div className="container mx-auto grid gap-6 px-4 py-8 sm:px-6 lg:grid-cols-2 lg:px-8">
         {/* Left Panel - Input Form */}
         <div className="space-y-6">
-          {/* Error Display */}
           <ErrorDisplay error={error} onDismiss={() => setError(null)} />
-          
+
           <Card>
             <CardHeader className="pb-4">
               <div className="flex items-start justify-between">
@@ -282,6 +304,7 @@ export default function MeetingIntelligence() {
                 <SampleTranscriptDialog onLoadSample={handleLoadSample} />
               </div>
             </CardHeader>
+
             <CardContent className="space-y-5">
               <div className="space-y-2">
                 <Label htmlFor="transcript" className="text-[13px] font-medium text-[#6B7280]">
@@ -300,7 +323,9 @@ export default function MeetingIntelligence() {
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="meeting-type" className="text-[13px] font-medium text-[#6B7280]">Meeting Type</Label>
+                  <Label htmlFor="meeting-type" className="text-[13px] font-medium text-[#6B7280]">
+                    Meeting Type
+                  </Label>
                   <Select value={meetingType} onValueChange={setMeetingType}>
                     <SelectTrigger id="meeting-type">
                       <SelectValue placeholder="Select type..." />
@@ -316,10 +341,12 @@ export default function MeetingIntelligence() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="project-name" className="text-[13px] font-medium text-[#6B7280]">Project Name</Label>
+                  <Label htmlFor="project-name" className="text-[13px] font-medium text-[#6B7280]">
+                    Project Name (optional override)
+                  </Label>
                   <Input
                     id="project-name"
-                    placeholder="e.g., Mobile App Redesign"
+                    placeholder={`Default: ${activeProject?.name ?? 'Select a project'}`}
                     value={projectName}
                     onChange={(e) => setProjectName(e.target.value)}
                   />
@@ -327,7 +354,9 @@ export default function MeetingIntelligence() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="participants" className="text-[13px] font-medium text-[#6B7280]">Participants</Label>
+                <Label htmlFor="participants" className="text-[13px] font-medium text-[#6B7280]">
+                  Participants
+                </Label>
                 <Input
                   id="participants"
                   placeholder="e.g., John, Sarah, Mike"
@@ -361,6 +390,7 @@ export default function MeetingIntelligence() {
             <CardHeader className="pb-3">
               <CardTitle className="text-lg font-semibold text-[#111827]">Analysis Results</CardTitle>
             </CardHeader>
+
             <CardContent>
               <Tabs defaultValue="current" className="w-full">
                 <TabsList className="grid w-full grid-cols-2 bg-transparent border-b border-[#E5E7EB] rounded-none h-auto p-0">
@@ -391,6 +421,7 @@ export default function MeetingIntelligence() {
                           )}
                         </Button>
                       </div>
+
                       <div className="prose prose-sm max-w-none rounded-lg border border-[#E5E7EB] bg-white p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
                         <ReactMarkdown>{currentOutput}</ReactMarkdown>
                       </div>
@@ -440,11 +471,15 @@ export default function MeetingIntelligence() {
                                     </Badge>
                                   )}
                                 </div>
+
                                 {session.project_name && (
-                                  <p className="font-medium text-sm text-[#111827]">{session.project_name}</p>
+                                  <p className="font-medium text-sm text-[#111827]">
+                                    {session.project_name}
+                                  </p>
                                 )}
+
                                 <p className="line-clamp-2 text-sm text-[#6B7280]">
-                                  {session.transcript.substring(0, 100)}...
+                                  {(session.transcript || '').substring(0, 100)}...
                                 </p>
                               </div>
                             </CardContent>

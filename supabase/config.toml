@@ -1,8 +1,3 @@
-[project]
-project_id = "d0f0c464-46bc-4c91-8882-57a401f06c71"
-# User's Supabase project where edge functions are deployed
-ref = "aziandtcipmaphviocgz"
-
 [api]
 enabled = true
 port = 54321

@@ -13,44 +13,58 @@ const ActiveProjectContext = createContext<ActiveProjectContextType | undefined>
 
 const STORAGE_KEY = 'pm_suite_active_project_id';
 
+// Simple UUID v4-ish check (good enough for guarding stale numeric IDs)
+const isUuid = (value: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
 export function ActiveProjectProvider({ children }: { children: ReactNode }) {
   const [activeProject, setActiveProjectState] = useState<ActiveProject | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Initialize active project on mount
   useEffect(() => {
-    initializeActiveProject();
+    void initializeActiveProject();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const initializeActiveProject = async () => {
     try {
       setIsLoading(true);
-      
+
       // Check localStorage for saved project ID
       const savedProjectId = localStorage.getItem(STORAGE_KEY);
-      
-      if (savedProjectId) {
-        const projectId = parseInt(savedProjectId, 10);
-        const project = await fetchProjectById(projectId);
-        
-        if (project && project.status === 'Active') {
+
+      // If we find a saved ID but it's not a UUID (likely legacy numeric), clear it.
+      if (savedProjectId && !isUuid(savedProjectId)) {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+
+      // Load saved project if valid UUID
+      if (savedProjectId && isUuid(savedProjectId)) {
+        const project = await fetchProjectById(savedProjectId);
+
+        if (project && project.status === 'active') {
           setActiveProjectState({
             id: project.id,
             name: project.name,
             description: project.description,
           });
           return;
+        } else {
+          // Saved project no longer valid/active — clear so we don't keep trying it
+          localStorage.removeItem(STORAGE_KEY);
         }
       }
-      
+
       // Fallback to Ad-hoc project
       const adHocProject = await fetchAdHocProject();
-      setActiveProjectState({
+      const adHoc: ActiveProject = {
         id: adHocProject.id,
         name: adHocProject.name,
         description: adHocProject.description,
-      });
-      localStorage.setItem(STORAGE_KEY, adHocProject.id.toString());
+      };
+
+      setActiveProjectState(adHoc);
+      localStorage.setItem(STORAGE_KEY, adHocProject.id);
     } catch (error) {
       console.error('Error initializing active project:', error);
     } finally {
@@ -60,7 +74,7 @@ export function ActiveProjectProvider({ children }: { children: ReactNode }) {
 
   const setActiveProject = (project: ActiveProject) => {
     setActiveProjectState(project);
-    localStorage.setItem(STORAGE_KEY, project.id.toString());
+    localStorage.setItem(STORAGE_KEY, project.id);
   };
 
   return (

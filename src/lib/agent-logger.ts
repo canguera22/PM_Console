@@ -20,12 +20,14 @@ interface LogEntry {
 export class AgentLogger {
   private static logs: LogEntry[] = [];
 
-  static logRequest(module: string, functionName: string, payload: any) {
+    static logRequest(module: string, functionName: string, payload: any) {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       action: 'REQUEST_SENT',
       module,
-      requestUrl: `https://aziandtcipmaphviocgz.supabase.co/functions/v1/${functionName}`,
+      requestUrl: supabaseUrl ? `${supabaseUrl}/functions/v1/${functionName}` : undefined,
       payload,
     };
 

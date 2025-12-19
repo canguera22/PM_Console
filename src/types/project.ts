@@ -1,17 +1,17 @@
 // Project types for the PM Agent Operations Suite
 
 export interface Project {
-  id: number;
+  id: string;
   created_at: string;
   name: string;
-  description?: string;
-  owner?: string;
-  status: 'Active' | 'Archived';
-  metadata?: Record<string, unknown>;
+  description: string | null; // <- important: Supabase returns null for nullable columns
+  owner?: string | null;
+  status: 'active' | 'archived' | 'deleted';
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface ActiveProject {
-  id: number;
+  id: string;
   name: string;
-  description?: string;
+  description: string | null;
 }
