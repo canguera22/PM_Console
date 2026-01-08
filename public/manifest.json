@@ -1,7 +1,7 @@
 {
-  "name": "Altan",
-  "short_name": "Altan",
-  "description": "Altan Application",
+  "name": "PM Suite",
+  "short_name": "PM Suite",
+  "description": "PM Suite – AI tools for Product Managers",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
@@ -20,4 +20,4 @@
       "purpose": "any maskable"
     }
   ]
-} 
+}
