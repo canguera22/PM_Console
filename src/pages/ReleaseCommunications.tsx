@@ -11,12 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
 import {
   ArrowLeft,
@@ -30,15 +25,44 @@ import {
   AlertCircle,
   Lightbulb,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+
 import { generateReleaseDocumentation } from '@/lib/release-agent';
 import { supabaseFetch } from '@/lib/supabase';
-import { ReleaseSession, OUTPUT_TYPES, OutputType, ParsedCSV } from '@/types/release';
+import { OUTPUT_TYPES, OutputType, ParsedCSV } from '@/types/release';
 import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
-import ReactMarkdown from 'react-markdown';
-import { callPMAdvisorAgent, fetchContextArtifacts, saveAdvisorReview } from '@/lib/pm-advisor';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
+///import { fetchContextArtifacts } from '@/lib/context-artifacts';
+import { callPMAdvisorAgent } from '@/lib/pm-advisor';
+
+
+// project_artifacts row shape (based on your schema)
+type ProjectArtifact = {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  project_id: string;
+  project_name: string;
+  artifact_type: string;
+  artifact_name: string | null;
+  input_data: any; // jsonb
+  output_data: string | null;
+  metadata: Record<string, any> | null;
+  status: string | null;
+    advisor_feedback: string | null;
+  advisor_reviewed_at: string | null;
+};
+
+// Helper: ensure values from DB are valid OutputType values
+function coerceSelectedOutputs(values: any): OutputType[] {
+  if (!Array.isArray(values)) return [];
+  const allowed = new Set<string>(OUTPUT_TYPES as unknown as string[]);
+  return values.filter((v) => typeof v === 'string' && allowed.has(v)) as OutputType[];
+}
+
+const ARTIFACT_TYPE = 'release_communications';
 
 export default function ReleaseCommunications() {
   const navigate = useNavigate();
@@ -50,6 +74,7 @@ export default function ReleaseCommunications() {
   const [csvData, setCsvData] = useState<string>('');
   const [parsedCsv, setParsedCsv] = useState<ParsedCSV | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [isParsingCsv, setIsParsingCsv] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
 
   // Form state
@@ -61,137 +86,142 @@ export default function ReleaseCommunications() {
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentOutput, setCurrentOutput] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<ReleaseSession[]>([]);
+  const [sessions, setSessions] = useState<ProjectArtifact[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [copiedToClipboard, setCopiedToClipboard] = useState(false);
 
   // PM Advisor state
   const [advisorOutput, setAdvisorOutput] = useState<string>('');
   const [isRunningAdvisor, setIsRunningAdvisor] = useState(false);
-  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
+  const [currentArtifactId, setCurrentArtifactId] = useState<string | null>(null);
 
   // Error state
   const [error, setError] = useState<string | null>(null);
   const [advisorError, setAdvisorError] = useState<string | null>(null);
 
-  // Load session history when active project changes
   useEffect(() => {
-    if (activeProject) {
-      loadSessions();
+    if (activeProject) loadSessions();
+    else {
+      setSessions([]);
+      setCurrentOutput(null);
+      setCurrentArtifactId(null);
+      setAdvisorOutput('');
+      setAdvisorError(null);
+      setError(null);
     }
-  }, [activeProject]);
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id]);
 
   const loadSessions = async () => {
-    if (!activeProject) return;
-    try {
-      setIsLoadingSessions(true);
-      const data = await supabaseFetch<ReleaseSession[]>(
-        `/release_sessions?project_id=eq.${activeProject.id}&order=created_at.desc&limit=20`
-      );
-      setSessions(data);
-    } catch (error) {
-      console.error('Error loading sessions:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load session history',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsLoadingSessions(false);
+  if (!activeProject) return;
+
+  try {
+    setIsLoadingSessions(true);
+
+    const data = await supabaseFetch<ProjectArtifact[]>(
+      `/project_artifacts?project_id=eq.${activeProject.id}` +
+      `&artifact_type=eq.${ARTIFACT_TYPE}` +
+      `&status=eq.active` +
+      `&order=created_at.desc&limit=20`
+    );
+
+    setSessions(data);
+
+    // ✅ AUTO-LOAD MOST RECENT SESSION (includes advisor feedback)
+    if (data.length > 0) {
+      loadSession(data[0]);
     }
+
+  } catch (err) {
+    console.error('Error loading sessions:', err);
+    toast({
+      title: 'Error',
+      description: 'Failed to load session history',
+      variant: 'destructive',
+    });
+  } finally {
+    setIsLoadingSessions(false);
+  }
+};
+
+
+  const resetCsvState = () => {
+    setCsvFile(null);
+    setCsvData('');
+    setParsedCsv(null);
+    setParseError(null);
+    setIsParsingCsv(false);
   };
 
   const handleFileChange = (file: File | null) => {
     if (!file) {
-      setCsvFile(null);
-      setCsvData('');
-      setParsedCsv(null);
-      setParseError(null);
+      resetCsvState();
       return;
     }
 
-    if (!file.name.endsWith('.csv')) {
+    if (!file.name.toLowerCase().endsWith('.csv')) {
       setParseError('Please upload a CSV file');
-      toast({
-        title: 'Invalid File',
-        description: 'Please upload a .csv file',
-        variant: 'destructive',
-      });
+      toast({ title: 'Invalid File', description: 'Please upload a .csv file', variant: 'destructive' });
       return;
     }
 
-    // Check file size (10MB limit)
     if (file.size > 10 * 1024 * 1024) {
       setParseError('File too large (max 10MB)');
-      toast({
-        title: 'File Too Large',
-        description: 'Please upload a CSV file smaller than 10MB',
-        variant: 'destructive',
-      });
+      toast({ title: 'File Too Large', description: 'Please upload a CSV smaller than 10MB', variant: 'destructive' });
       return;
     }
 
     setCsvFile(file);
+    setCsvData('');
+    setParsedCsv(null);
     setParseError(null);
+    setIsParsingCsv(true);
 
-    // Read and parse CSV
     const reader = new FileReader();
+
     reader.onload = (e) => {
-      const text = e.target?.result as string;
+      const text = (e.target?.result as string) || '';
       setCsvData(text);
 
-      // Parse CSV with Papa Parse
       Papa.parse(text, {
         header: true,
         skipEmptyLines: true,
-        delimiter: '',
         complete: (results) => {
           if (results.errors.length > 0) {
             const errorMsg = results.errors[0].message;
             setParseError(`CSV parsing error: ${errorMsg}`);
-            toast({
-              title: 'CSV Parsing Error',
-              description: errorMsg,
-              variant: 'destructive',
-            });
+            toast({ title: 'CSV Parsing Error', description: errorMsg, variant: 'destructive' });
+            setParsedCsv(null);
+            setIsParsingCsv(false);
             return;
           }
 
           const headers = results.meta.fields || [];
-          const rows = results.data;
+          const rows = results.data as any[];
 
-          setParsedCsv({
-            headers,
-            rows,
-            rowCount: rows.length,
-          });
+          setParsedCsv({ headers, rows, rowCount: rows.length });
 
-          // Show warning for large files
           if (rows.length > 100) {
-            toast({
-              title: 'Large CSV Detected',
-              description: `Processing ${rows.length} issues. This may take a moment.`,
-            });
+            toast({ title: 'Large CSV Detected', description: `Processing ${rows.length} issues. This may take a moment.` });
           }
+
+          setIsParsingCsv(false);
         },
-        error: (error) => {
-          setParseError(`Failed to parse CSV: ${error.message}`);
-          toast({
-            title: 'Error',
-            description: 'Failed to parse CSV file',
-            variant: 'destructive',
-          });
+        error: (err) => {
+          setParseError(`Failed to parse CSV: ${err.message}`);
+          toast({ title: 'Error', description: 'Failed to parse CSV file', variant: 'destructive' });
+          setParsedCsv(null);
+          setIsParsingCsv(false);
         },
       });
     };
 
     reader.onerror = () => {
       setParseError('Failed to read file');
-      toast({
-        title: 'Error',
-        description: 'Failed to read CSV file',
-        variant: 'destructive',
-      });
+      toast({ title: 'Error', description: 'Failed to read CSV file', variant: 'destructive' });
+      setParsedCsv(null);
+      setIsParsingCsv(false);
     };
 
     reader.readAsText(file);
@@ -210,282 +240,238 @@ export default function ReleaseCommunications() {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-
     const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) {
-      handleFileChange(files[0]);
-    }
+    if (files.length > 0) handleFileChange(files[0]);
   }, []);
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files && files.length > 0) {
-      handleFileChange(files[0]);
-    }
+    if (files && files.length > 0) handleFileChange(files[0]);
   };
 
-  const clearFile = () => {
-    handleFileChange(null);
-  };
+  const clearFile = () => handleFileChange(null);
 
   const toggleOutput = (output: OutputType) => {
-    setSelectedOutputs((prev) =>
-      prev.includes(output)
-        ? prev.filter((o) => o !== output)
-        : [...prev, output]
-    );
+    setSelectedOutputs((prev) => (prev.includes(output) ? prev.filter((o) => o !== output) : [...prev, output]));
   };
 
   const handleGenerate = async () => {
-    // Clear previous error
     setError(null);
+    setAdvisorError(null);
+
+    if (!activeProject) {
+      const msg = 'No active project selected';
+      setError(msg);
+      toast({ title: 'Error', description: msg, variant: 'destructive' });
+      return;
+    }
+
+    if (isParsingCsv) {
+      const msg = 'CSV is still being processed. Please wait a moment and try again.';
+      setError(msg);
+      toast({ title: 'Please Wait', description: msg, variant: 'destructive' });
+      return;
+    }
 
     if (!csvData) {
-      const errorMsg = 'Please upload a CSV file';
-      setError(errorMsg);
-      toast({
-        title: 'Validation Error',
-        description: errorMsg,
-        variant: 'destructive',
-      });
+      const msg = 'Please upload a CSV file';
+      setError(msg);
+      toast({ title: 'Validation Error', description: msg, variant: 'destructive' });
       return;
     }
 
     if (selectedOutputs.length === 0) {
-      const errorMsg = 'Please select at least one output type';
-      setError(errorMsg);
-      toast({
-        title: 'Validation Error',
-        description: errorMsg,
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    if (!activeProject) {
-      const errorMsg = 'No active project selected';
-      setError(errorMsg);
-      toast({
-        title: 'Error',
-        description: errorMsg,
-        variant: 'destructive',
-      });
+      const msg = 'Please select at least one output type';
+      setError(msg);
+      toast({ title: 'Validation Error', description: msg, variant: 'destructive' });
       return;
     }
 
     setIsGenerating(true);
-    console.log('👤 [User Action] Clicked "Generate Release Notes" button');
-    console.log('📝 [Input Data]', {
-      csvFilename: csvFile?.name,
-      csvRowCount: parsedCsv?.rowCount,
-      selectedOutputs,
-      releaseName,
-      targetAudience,
-      projectId: activeProject.id,
-    });
 
     try {
-      // Call the release agent with logging
+      // Log metadata only; invoke with full payload
+      const logPayload = {
+        project_id: activeProject.id,
+        project_name: activeProject.name,
+        csv_filename: csvFile?.name ?? null,
+        csv_row_count: parsedCsv?.rowCount ?? null,
+        selected_outputs: selectedOutputs,
+        release_name: releaseName || null,
+        target_audience: targetAudience || null,
+        has_known_risks: !!knownRisks,
+      };
+
+      const invokePayload = {
+        csv_data: csvData,
+        selected_outputs: selectedOutputs,
+        release_name: releaseName || undefined,
+        target_audience: targetAudience || undefined,
+        known_risks: knownRisks || undefined,
+      };
+
       const result = await callAgentWithLogging(
         'Release Communications',
         'release-communications',
-        {
-          csv_data: csvData,
-          selected_outputs: selectedOutputs,
-          release_name: releaseName || undefined,
-          target_audience: targetAudience || undefined,
-          known_risks: knownRisks || undefined,
-        },
-        () => generateReleaseDocumentation({
-          csv_data: csvData,
-          selected_outputs: selectedOutputs,
-          release_name: releaseName || undefined,
-          target_audience: targetAudience || undefined,
-          known_risks: knownRisks || undefined,
-        })
+        logPayload,
+        () => generateReleaseDocumentation(invokePayload)
       );
 
-      console.log('✨ [Success] Received AI-generated release documentation', { outputLength: result.output.length });
+      // Persist to project_artifacts
+      const artifactName =
+        (releaseName && releaseName.trim()) ||
+        (csvFile?.name ? `Release Notes • ${csvFile.name}` : 'Release Notes');
 
-      // Save to database with project_id
-      console.log('💾 [Database] Saving to release_sessions table...');
-      const savedSessions = await supabaseFetch<ReleaseSession[]>('/release_sessions', {
-        method: 'POST',
-        body: JSON.stringify({
-          release_name: releaseName || null,
-          target_audience: targetAudience || null,
-          known_risks: knownRisks || null,
-          csv_filename: csvFile?.name || null,
-          csv_row_count: parsedCsv?.rowCount || null,
-          selected_outputs: selectedOutputs,
-          output: result.output,
-          project_id: activeProject.id,
-          module_type: 'release_communications',
-          metadata: {},
-        }),
-      });
-      console.log('💾 [Database] Saved successfully');
+      const inputData = {
+        csv_filename: csvFile?.name ?? null,
+        csv_row_count: parsedCsv?.rowCount ?? null,
+        selected_outputs: selectedOutputs,
+        release_name: releaseName || null,
+        target_audience: targetAudience || null,
+        known_risks: knownRisks || null,
+      };
+
+      const created = await supabaseFetch<ProjectArtifact[]>('/project_artifacts', {
+      method: 'POST',
+      body: JSON.stringify({
+        project_id: activeProject.id,
+        project_name: activeProject.name,
+        artifact_type: ARTIFACT_TYPE,
+        artifact_name: artifactName,
+        input_data: inputData,
+        output_data: result.output,
+        metadata: {},
+        status: 'active',
+        advisor_feedback: null,
+        advisor_reviewed_at: null,
+      }),
+    });
+
+
 
       setCurrentOutput(result.output);
-      // Store the session ID for advisor review
-      if (savedSessions && savedSessions.length > 0) {
-        setCurrentSessionId(savedSessions[0].id);
-      }
+      setAdvisorOutput('');
 
-      // Refresh session history
+      if (created && created[0]?.id) setCurrentArtifactId(created[0].id);
+      else setCurrentArtifactId(null);
+
       await loadSessions();
 
-      toast({
-        title: 'Success',
-        description: 'Release documentation generated successfully',
-      });
-    } catch (error: any) {
-      console.error('💥 [Error Handler] Caught error:', error);
-      const errorMessage = parseErrorMessage(error);
+      toast({ title: 'Success', description: 'Release documentation generated successfully' });
+    } catch (err: any) {
+      const errorMessage = parseErrorMessage(err);
       setError(errorMessage);
-      toast({
-        title: 'Error',
-        description: errorMessage,
-        variant: 'destructive',
-        duration: 5000,
-      });
+      toast({ title: 'Error', description: errorMessage, variant: 'destructive', duration: 5000 });
     } finally {
       setIsGenerating(false);
-      console.log('🏁 [Complete] Release generation finished');
     }
   };
 
   const handleRunAdvisorReview = async () => {
-    // Clear previous error
     setAdvisorError(null);
 
-    if (!currentOutput) {
-      const errorMsg = 'No release notes to review. Generate release notes first.';
-      setAdvisorError(errorMsg);
-      toast({
-        title: 'Validation Error',
-        description: errorMsg,
-        variant: 'destructive',
-      });
+    if (!activeProject) {
+      const msg = 'No active project selected';
+      setAdvisorError(msg);
+      toast({ title: 'Error', description: msg, variant: 'destructive' });
       return;
     }
 
-    if (!activeProject) {
-      const errorMsg = 'No active project selected';
-      setAdvisorError(errorMsg);
-      toast({
-        title: 'Error',
-        description: errorMsg,
-        variant: 'destructive',
-      });
+    if (!currentOutput) {
+      const msg = 'No release notes to review. Generate or load a session first.';
+      setAdvisorError(msg);
+      toast({ title: 'Validation Error', description: msg, variant: 'destructive' });
+      return;
+    }
+
+    if (!currentArtifactId) {
+      const msg = 'No artifact selected. Generate release notes or load a session from history first.';
+      setAdvisorError(msg);
+      toast({ title: 'Validation Error', description: msg, variant: 'destructive' });
       return;
     }
 
     setIsRunningAdvisor(true);
-    console.log('👤 [User Action] Clicked "Run PM Advisor Review" button');
 
     try {
-      // Fetch context artifacts from other modules
-      console.log('🔍 [Context] Fetching context artifacts from other modules...');
-      const contextArtifacts = await fetchContextArtifacts(activeProject.id);
+      ///const contextArtifacts = await fetchContextArtifacts(activeProject.id);
 
-      // Call PM Advisor agent with logging
       const advisorResult = await callAgentWithLogging(
         'PM Advisor (Release Review)',
         'pm-advisor',
         {
-          artifact_output: currentOutput,
-          module_type: 'release_communications',
           project_id: activeProject.id,
           project_name: activeProject.name,
-          source_session_table: 'release_sessions',
-          source_session_id: currentSessionId,
-          artifact_type: 'Customer Release Notes',
+          artifact_type: ARTIFACT_TYPE,
+          source_session_table: 'project_artifacts',
+          source_session_id: currentArtifactId,
           selected_outputs: selectedOutputs,
-          context_artifacts: contextArtifacts,
         },
-        () => callPMAdvisorAgent({
-          artifact_output: currentOutput,
-          module_type: 'release_communications',
-          project_id: activeProject.id,
-          project_name: activeProject.name,
-          source_session_table: 'release_sessions',
-          source_session_id: currentSessionId,
-          artifact_type: 'Customer Release Notes',
-          selected_outputs: selectedOutputs,
-          context_artifacts: contextArtifacts,
-        })
+        () =>
+          callPMAdvisorAgent({
+            artifact_output: currentOutput,
+            module_type: ARTIFACT_TYPE,
+            project_id: activeProject.id,
+            project_name: activeProject.name,
+            source_session_table: 'project_artifacts',
+            source_session_id: currentArtifactId,
+            artifact_type: 'Customer Release Notes',
+            selected_outputs: selectedOutputs,
+            context_artifacts: [],
+          })
       );
+        // Save advisor feedback onto the same artifact
+await supabaseFetch(`/project_artifacts?id=eq.${currentArtifactId}`, {
+  method: 'PATCH',
+  body: JSON.stringify({
+    advisor_feedback: advisorResult.output,
+    advisor_reviewed_at: new Date().toISOString(),
+  }),
+});
 
-      console.log('✨ [Success] Received PM Advisor review', { outputLength: advisorResult.output.length });
-      setAdvisorOutput(advisorResult.output);
+  setAdvisorOutput(advisorResult.output);
+await loadSessions();
 
-      // Save advisor review to database
-      console.log('💾 [Database] Saving PM Advisor review...');
-      await saveAdvisorReview(
-        activeProject.id,
-        activeProject.name,
-        'release_communications',
-        'release_sessions',
-        currentSessionId,
-        'Customer Release Notes',
-        { selected_outputs: selectedOutputs, reviewed_at: new Date().toISOString() },
-        currentOutput,
-        advisorResult.output,
-        {
-          context_available: {
-            documentation: !!contextArtifacts.documentation_sessions,
-            meeting: !!contextArtifacts.meeting_sessions,
-            prioritization: !!contextArtifacts.prioritization_sessions,
-            release: !!contextArtifacts.release_sessions,
-          },
-        }
-      );
-      console.log('💾 [Database] PM Advisor review saved successfully');
-
-      toast({
-        title: 'Success',
-        description: 'PM Advisor review complete',
-      });
-    } catch (error: any) {
-      console.error('💥 [Error Handler] Caught error:', error);
-      const errorMessage = parseErrorMessage(error);
+      toast({ title: 'Success', description: 'PM Advisor review complete' });
+    } catch (err: any) {
+      const errorMessage = parseErrorMessage(err);
       setAdvisorError(errorMessage);
-      toast({
-        title: 'Error',
-        description: errorMessage,
-        variant: 'destructive',
-        duration: 5000,
-      });
+      toast({ title: 'Error', description: errorMessage, variant: 'destructive', duration: 5000 });
     } finally {
       setIsRunningAdvisor(false);
-      console.log('🏁 [Complete] PM Advisor review finished');
     }
   };
 
   const handleCopyToClipboard = async () => {
     if (!currentOutput) return;
-
     try {
       await navigator.clipboard.writeText(currentOutput);
       setCopiedToClipboard(true);
-      toast({
-        title: 'Copied!',
-        description: 'Release documentation copied to clipboard',
-      });
+      toast({ title: 'Copied!', description: 'Release documentation copied to clipboard' });
       setTimeout(() => setCopiedToClipboard(false), 2000);
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: 'Failed to copy to clipboard',
-        variant: 'destructive',
-      });
+    } catch {
+      toast({ title: 'Error', description: 'Failed to copy to clipboard', variant: 'destructive' });
     }
   };
 
-  const loadSession = (session: ReleaseSession) => {
-    setCurrentOutput(session.output);
-  };
+    const loadSession = (session: ProjectArtifact) => {
+  setError(null);
+  setAdvisorError(null);
+
+  setCurrentArtifactId(session.id);
+  setCurrentOutput(session.output_data ?? null);
+
+  // 🔑 LOAD advisor feedback if it exists
+  setAdvisorOutput(session.advisor_feedback ?? '');
+
+  const input = session.input_data || {};
+  setReleaseName(input.release_name ?? '');
+  setTargetAudience(input.target_audience ?? '');
+  setKnownRisks(input.known_risks ?? '');
+  setSelectedOutputs(coerceSelectedOutputs(input.selected_outputs));
+};
+
+
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -498,7 +484,13 @@ export default function ReleaseCommunications() {
     }).format(date);
   };
 
-  const canGenerate = csvFile && !parseError && selectedOutputs.length > 0;
+  const canGenerate =
+    !!activeProject &&
+    !!csvData &&
+    !!parsedCsv &&
+    !parseError &&
+    !isParsingCsv &&
+    selectedOutputs.length > 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -507,21 +499,14 @@ export default function ReleaseCommunications() {
         <div className="container mx-auto px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate('/')}
-                className="gap-2"
-              >
+              <Button variant="ghost" size="sm" onClick={() => navigate('/')} className="gap-2">
                 <ArrowLeft className="h-4 w-4" />
                 Back
               </Button>
               <Separator orientation="vertical" className="h-6" />
               <div>
                 <h1 className="text-xl font-semibold">Release Communications</h1>
-                <p className="text-sm text-muted-foreground">
-                  Generate release documentation from Jira CSV exports
-                </p>
+                <p className="text-sm text-muted-foreground">Generate release documentation from Jira CSV exports</p>
               </div>
             </div>
             <ActiveProjectSelector />
@@ -542,9 +527,8 @@ export default function ReleaseCommunications() {
 
       {/* Main Content */}
       <div className="container mx-auto grid gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[2fr_1.5fr_2fr] lg:px-8">
-        {/* Left Panel - CSV Upload & Inputs */}
+        {/* Left Panel */}
         <div className="space-y-6">
-          {/* Error Display */}
           <ErrorDisplay error={error} onDismiss={() => setError(null)} />
           <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />
 
@@ -571,16 +555,6 @@ export default function ReleaseCommunications() {
                                 <li>Description</li>
                                 <li>Status</li>
                               </ul>
-                              <p className="font-medium mt-2">Optional (but helpful):</p>
-                              <ul className="list-disc pl-4 space-y-0.5">
-                                <li>Labels</li>
-                                <li>Components</li>
-                                <li>Fix Version / Affected Version</li>
-                                <li>Priority</li>
-                                <li>Acceptance Criteria</li>
-                                <li>Story Points</li>
-                                <li>Created Date / Resolved Date</li>
-                              </ul>
                             </div>
                           </div>
                         </TooltipContent>
@@ -591,8 +565,8 @@ export default function ReleaseCommunications() {
                 </div>
               </div>
             </CardHeader>
+
             <CardContent className="space-y-4">
-              {/* CSV Upload Dropzone */}
               <div
                 className={`relative rounded-lg border-2 border-dashed transition-colors ${
                   isDragging
@@ -604,7 +578,7 @@ export default function ReleaseCommunications() {
                     : 'border-muted-foreground/25 hover:border-muted-foreground/50'
                 }`}
                 onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
+                onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
               >
                 <input
@@ -620,11 +594,11 @@ export default function ReleaseCommunications() {
                       <FileText className="h-12 w-12 text-primary mb-3" />
                       <div className="space-y-1">
                         <p className="font-medium">{csvFile.name}</p>
-                        {parsedCsv && (
-                          <p className="text-sm text-muted-foreground">
-                            {parsedCsv.rowCount} issues loaded
-                          </p>
-                        )}
+                        {isParsingCsv ? (
+                          <p className="text-sm text-muted-foreground">Parsing CSV…</p>
+                        ) : parsedCsv ? (
+                          <p className="text-sm text-muted-foreground">{parsedCsv.rowCount} issues loaded</p>
+                        ) : null}
                       </div>
                       <Button
                         variant="ghost"
@@ -634,6 +608,7 @@ export default function ReleaseCommunications() {
                           clearFile();
                         }}
                         className="mt-3 gap-2"
+                        disabled={isParsingCsv}
                       >
                         <X className="h-4 w-4" />
                         Remove
@@ -643,9 +618,7 @@ export default function ReleaseCommunications() {
                     <>
                       <Upload className="h-12 w-12 text-muted-foreground mb-3" />
                       <p className="font-medium">Drop CSV file here</p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        or click to browse
-                      </p>
+                      <p className="text-sm text-muted-foreground mt-1">or click to browse</p>
                       <Button variant="outline" size="sm" className="mt-3" asChild>
                         <label htmlFor="csv-upload" className="cursor-pointer">
                           Browse Files
@@ -665,10 +638,11 @@ export default function ReleaseCommunications() {
 
               <Separator />
 
-              {/* Optional Inputs */}
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="release-name" className="text-sm font-medium text-[#111827]">Release Name (Optional)</Label>
+                  <Label htmlFor="release-name" className="text-sm font-medium text-[#111827]">
+                    Release Name (Optional)
+                  </Label>
                   <Input
                     id="release-name"
                     placeholder="e.g., v2.5.0, Sprint 42"
@@ -678,7 +652,9 @@ export default function ReleaseCommunications() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="target-audience" className="text-sm font-medium text-[#111827]">Target Audience (Optional)</Label>
+                  <Label htmlFor="target-audience" className="text-sm font-medium text-[#111827]">
+                    Target Audience (Optional)
+                  </Label>
                   <Input
                     id="target-audience"
                     placeholder="e.g., Internal stakeholders, Sales, External users"
@@ -688,7 +664,9 @@ export default function ReleaseCommunications() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="known-risks" className="text-sm font-medium text-[#111827]">Known Risks / Limitations (Optional)</Label>
+                  <Label htmlFor="known-risks" className="text-sm font-medium text-[#111827]">
+                    Known Risks / Limitations (Optional)
+                  </Label>
                   <Textarea
                     id="known-risks"
                     placeholder="Optional: Note any known issues or limitations"
@@ -702,14 +680,12 @@ export default function ReleaseCommunications() {
           </Card>
         </div>
 
-        {/* Middle Panel - Output Selection */}
+        {/* Middle Panel */}
         <div className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="text-lg font-semibold text-[#111827]">Select Documentation Types</CardTitle>
-              <CardDescription>
-                Choose one or more output formats
-              </CardDescription>
+              <CardDescription>Choose one or more output formats</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-3">
@@ -722,11 +698,9 @@ export default function ReleaseCommunications() {
                       id={output}
                       checked={selectedOutputs.includes(output)}
                       onCheckedChange={() => toggleOutput(output)}
+                      disabled={isGenerating || isParsingCsv}
                     />
-                    <label
-                      htmlFor={output}
-                      className="flex-1 cursor-pointer text-sm font-medium leading-tight"
-                    >
+                    <label htmlFor={output} className="flex-1 cursor-pointer text-sm font-medium leading-tight">
                       {output}
                     </label>
                   </div>
@@ -735,27 +709,26 @@ export default function ReleaseCommunications() {
 
               <Separator />
 
-              <Button
-                onClick={handleGenerate}
-                disabled={!canGenerate || isGenerating}
-                className="w-full"
-                size="lg"
-              >
+              <Button onClick={handleGenerate} disabled={!canGenerate || isGenerating} className="w-full" size="lg">
                 {isGenerating ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     Generating release documentation...
+                  </>
+                ) : isParsingCsv ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Parsing CSV…
                   </>
                 ) : (
                   'Generate Release Notes'
                 )}
               </Button>
 
-              {/* PM Advisor Review Button */}
               <Button
                 variant="outline"
                 onClick={handleRunAdvisorReview}
-                disabled={!currentOutput || isRunningAdvisor}
+                disabled={!currentOutput || !currentArtifactId || isRunningAdvisor}
                 className="w-full mt-3"
                 size="lg"
               >
@@ -771,22 +744,11 @@ export default function ReleaseCommunications() {
                   </>
                 )}
               </Button>
-
-              {!csvFile && (
-                <p className="text-center text-xs text-muted-foreground">
-                  Upload CSV to continue
-                </p>
-              )}
-              {csvFile && selectedOutputs.length === 0 && (
-                <p className="text-center text-xs text-muted-foreground">
-                  Select at least one output type
-                </p>
-              )}
             </CardContent>
           </Card>
         </div>
 
-        {/* Right Panel - Results Display */}
+        {/* Right Panel */}
         <div className="space-y-6">
           <Card className="lg:sticky lg:top-6">
             <CardHeader>
@@ -804,12 +766,7 @@ export default function ReleaseCommunications() {
                   {currentOutput ? (
                     <>
                       <div className="flex justify-end">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleCopyToClipboard}
-                          className="gap-2"
-                        >
+                        <Button variant="outline" size="sm" onClick={handleCopyToClipboard} className="gap-2">
                           {copiedToClipboard ? (
                             <>
                               <CheckCircle2 className="h-4 w-4" />
@@ -829,119 +786,61 @@ export default function ReleaseCommunications() {
                     </>
                   ) : (
                     <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
-                      <div className="text-center">
-                        <p className="text-sm text-muted-foreground">
-                          Upload CSV and generate release notes to see results.
-                        </p>
-                      </div>
+                      <p className="text-sm text-muted-foreground">Upload CSV and generate release notes to see results.</p>
                     </div>
                   )}
                 </TabsContent>
 
                 <TabsContent value="advisor" className="mt-4 space-y-4">
-                  {/* Advisor Error Display */}
-                  <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />
-
                   {advisorOutput ? (
-                    <>
-                      <div className="flex justify-end">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(advisorOutput);
-                              toast({
-                                title: 'Copied!',
-                                description: 'PM Advisor review copied to clipboard',
-                              });
-                            } catch (error) {
-                              toast({
-                                title: 'Error',
-                                description: 'Failed to copy to clipboard',
-                                variant: 'destructive',
-                              });
-                            }
-                          }}
-                          className="gap-2"
-                        >
-                          <Copy className="h-4 w-4" />
-                          Copy to Clipboard
-                        </Button>
-                      </div>
-                      <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
-                        <ReactMarkdown>{advisorOutput}</ReactMarkdown>
-                      </div>
-                    </>
+                    <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
+                      <ReactMarkdown>{advisorOutput}</ReactMarkdown>
+                    </div>
                   ) : (
                     <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
                       <div className="text-center">
                         <Lightbulb className="mx-auto h-12 w-12 mb-3 text-muted-foreground opacity-50" />
-                        <p className="text-sm text-muted-foreground">
-                          Run PM Advisor Review to receive feedback on the current output.
-                        </p>
+                        <p className="text-sm text-muted-foreground">Run PM Advisor Review to receive feedback.</p>
                       </div>
                     </div>
                   )}
                 </TabsContent>
 
                 <TabsContent value="history" className="mt-4">
-                  <div className="space-y-3">
-                    {isLoadingSessions ? (
-                      <div className="flex min-h-[400px] items-center justify-center">
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : sessions.length === 0 ? (
-                      <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
-                        <div className="text-center">
-                          <p className="text-sm text-muted-foreground">
-                            No sessions yet. Generate your first release notes to get started.
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="max-h-[600px] space-y-3 overflow-y-auto">
-                        {sessions.map((session) => (
-                          <Card
-                            key={session.id}
-                            className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
-                            onClick={() => loadSession(session)}
-                          >
-                            <CardContent className="p-4">
-                              <div className="space-y-2">
-                                <div className="flex items-start justify-between gap-2">
-                                  <p className="text-xs text-muted-foreground">
-                                    {formatDate(session.created_at)}
-                                  </p>
-                                </div>
-                                {session.release_name && (
-                                  <p className="font-medium">{session.release_name}</p>
-                                )}
-                                {session.csv_filename && (
-                                  <p className="text-sm text-muted-foreground">
-                                    {session.csv_filename}
-                                    {session.csv_row_count && ` • ${session.csv_row_count} issues`}
-                                  </p>
-                                )}
-                                <div className="flex flex-wrap gap-1">
-                                  {session.selected_outputs.slice(0, 3).map((output) => (
-                                    <Badge key={output} variant="secondary" className="text-xs">
-                                      {output.split(' / ')[0]}
-                                    </Badge>
-                                  ))}
-                                  {session.selected_outputs.length > 3 && (
-                                    <Badge variant="secondary" className="text-xs">
-                                      +{session.selected_outputs.length - 3}
-                                    </Badge>
-                                  )}
-                                </div>
+                  {isLoadingSessions ? (
+                    <div className="flex min-h-[400px] items-center justify-center">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : sessions.length === 0 ? (
+                    <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
+                      <p className="text-sm text-muted-foreground">No sessions yet. Generate your first release notes.</p>
+                    </div>
+                  ) : (
+                    <div className="max-h-[600px] space-y-3 overflow-y-auto">
+                      {sessions.map((s) => (
+                        <Card
+                          key={s.id}
+                          className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
+                          onClick={() => loadSession(s)}
+                        >
+                          <CardContent className="p-4">
+                            <div className="space-y-2">
+                              <p className="text-xs text-muted-foreground">{formatDate(s.created_at)}</p>
+                              <p className="font-medium">{s.artifact_name || 'Release Notes'}</p>
+
+                              <div className="flex flex-wrap gap-1">
+                                {coerceSelectedOutputs(s.input_data?.selected_outputs).slice(0, 3).map((o) => (
+                                  <Badge key={o} variant="secondary" className="text-xs">
+                                    {o}
+                                  </Badge>
+                                ))}
                               </div>
-                            </CardContent>
-                          </Card>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
                 </TabsContent>
               </Tabs>
             </CardContent>

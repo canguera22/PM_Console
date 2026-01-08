@@ -17,15 +17,21 @@ import {
 } from 'lucide-react';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
+import { useSearchParams } from 'react-router-dom';
+
 
 interface ProjectArtifact {
   id: string;
   created_at: string;
-  project_id: number;
+  project_id: string;
   project_name: string;
   artifact_type: string;
   artifact_name: string;
   output_data: string;
+  input_data?: {
+    initiative_name?: string;
+    [key: string]: any;
+  };
   metadata: any;
   advisor_feedback: string | null;
   advisor_reviewed_at: string | null;
@@ -74,6 +80,16 @@ const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
     textColor: 'text-pink-700'
   }
 };
+  const getArtifactDisplayName = (artifact: ProjectArtifact) => {
+  if (artifact.artifact_type === 'prioritization') {
+    return (
+      artifact.input_data?.initiative_name?.trim() ||
+      'Untitled Backlog'
+    );
+  }
+
+  return artifact.artifact_name;
+};
 
 export default function ProjectDashboard() {
   const { activeProject, isLoading: projectLoading } = useActiveProject();
@@ -82,12 +98,25 @@ export default function ProjectDashboard() {
   const [selectedArtifact, setSelectedArtifact] = useState<ProjectArtifact | null>(null);
   const [filterType, setFilterType] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+
+const artifactIdFromUrl = searchParams.get('artifact');
 
   useEffect(() => {
-    if (activeProject) {
-      fetchArtifacts();
+  if (!activeProject) return;
+
+  fetchArtifacts().then(() => {
+    if (artifactIdFromUrl) {
+      openArtifactById(artifactIdFromUrl);
     }
-  }, [activeProject]);
+  });
+}, [activeProject, artifactIdFromUrl]);
+
+const closeArtifact = () => {
+  setSelectedArtifact(null);
+  setSearchParams({});
+};
 
   const fetchArtifacts = async () => {
     if (!activeProject) return;
@@ -117,6 +146,34 @@ export default function ProjectDashboard() {
     }
   };
 
+  const openArtifactById = async (artifactId: string) => {
+  if (!activeProject) return;
+
+  try {
+    const { data, error } = await supabase
+      .from('project_artifacts')
+      .select('*')
+      .eq('id', artifactId)
+      .eq('project_id', activeProject.id)
+      .eq('status', 'active')
+      .single();
+
+    if (error || !data) return;
+
+    setSelectedArtifact(data);
+  } catch (err) {
+    console.warn('Artifact not accessible', err);
+  }
+};
+
+const toggleSection = (type: string) => {
+  setCollapsedSections(prev => ({
+    ...prev,
+    [type]: !prev[type]
+  }));
+};
+
+
   // Filter artifacts
   const filteredArtifacts = artifacts.filter(artifact => {
     // Filter by type
@@ -127,7 +184,7 @@ export default function ProjectDashboard() {
     if (searchQuery) {
       const searchLower = searchQuery.toLowerCase();
       return (
-        artifact.artifact_name.toLowerCase().includes(searchLower) ||
+        getArtifactDisplayName(artifact).toLowerCase().includes(searchLower) ||
         artifact.output_data.toLowerCase().includes(searchLower)
       );
     }
@@ -256,41 +313,61 @@ export default function ProjectDashboard() {
             </p>
           </div>
         ) : (
-          <div className="space-y-8">
+                   <div className="space-y-8">
             {Object.entries(groupedArtifacts).map(([type, typeArtifacts]) => (
               <div key={type}>
-                <div className="flex items-center gap-2 mb-4">
+                {/* Section Header (Accordion Toggle) */}
+                <button
+                  onClick={() => toggleSection(type)}
+                  className="flex items-center gap-2 mb-4 w-full text-left group"
+                >
                   {(() => {
                     const Icon = ARTIFACT_TYPE_CONFIG[type]?.icon || FileText;
-                    return <Icon className={`w-5 h-5 ${ARTIFACT_TYPE_CONFIG[type]?.textColor}`} />;
+                    return (
+                      <Icon className={`w-5 h-5 ${ARTIFACT_TYPE_CONFIG[type]?.textColor}`} />
+                    );
                   })()}
                   <h2 className="text-lg font-semibold text-[#111827]">
                     {ARTIFACT_TYPE_CONFIG[type]?.label || type}
                   </h2>
-                  <span className="text-sm text-[#6B7280]">({typeArtifacts.length})</span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {typeArtifacts.map(artifact => (
-                    <ArtifactCard
-                      key={artifact.id}
-                      artifact={artifact}
-                      config={ARTIFACT_TYPE_CONFIG[artifact.artifact_type]}
-                      onClick={() => setSelectedArtifact(artifact)}
-                    />
-                  ))}
-                </div>
+                  <span className="text-sm text-[#6B7280]">
+                    ({typeArtifacts.length})
+                  </span>
+
+                  <ChevronRight
+                    className={`ml-auto w-4 h-4 transition-transform ${
+                      collapsedSections[type] ? '' : 'rotate-90'
+                    }`}
+                  />
+                </button>
+
+                {/* Collapsible Content */}
+                {!collapsedSections[type] && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {typeArtifacts.map(artifact => (
+                      <ArtifactCard
+                        key={artifact.id}
+                        artifact={artifact}
+                        config={ARTIFACT_TYPE_CONFIG[artifact.artifact_type]}
+                        onClick={() => setSelectedArtifact(artifact)}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
-          </div>
-        )}
-      </div>
+          </div> 
+        )}         
+      </div>       
+
+
 
       {/* Artifact Detail Modal */}
       {selectedArtifact && (
         <ArtifactDetailModal
           artifact={selectedArtifact}
           config={ARTIFACT_TYPE_CONFIG[selectedArtifact.artifact_type]}
-          onClose={() => setSelectedArtifact(null)}
+          onClose={closeArtifact}
         />
       )}
     </div>
@@ -338,15 +415,12 @@ function ArtifactCard({ artifact, config, onClick }: {
         )}
       </div>
       <h3 className="font-medium text-[#111827] mb-1 line-clamp-1">
-        {artifact.artifact_name}
+        {getArtifactDisplayName(artifact)}
       </h3>
       <p className="text-xs text-[#6B7280] mb-2">
         {new Date(artifact.created_at).toLocaleDateString()} at {new Date(artifact.created_at).toLocaleTimeString()}
       </p>
       <div className="flex items-center justify-between">
-        <span className="text-xs text-[#9CA3AF]">
-          {artifact.output_data.length} characters
-        </span>
         <ChevronRight className="w-4 h-4 text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors" />
       </div>
     </button>
@@ -371,7 +445,7 @@ function ArtifactDetailModal({ artifact, config, onClose }: {
               <Icon className={`w-6 h-6 ${config?.textColor} mt-1`} />
               <div>
                 <h2 className="text-xl font-bold text-[#111827] mb-1">
-                  {artifact.artifact_name}
+                  {getArtifactDisplayName(artifact)}
                 </h2>
                 <p className="text-sm text-[#6B7280]">
                   {config?.label} • {new Date(artifact.created_at).toLocaleDateString()} at {new Date(artifact.created_at).toLocaleTimeString()}

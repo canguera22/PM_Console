@@ -16,32 +16,39 @@ import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, Loader2, Copy, CheckCircle2, Upload, X, Download, Info, Plus, Trash2 } from 'lucide-react';
 import { calculateWSJF } from '@/lib/prioritization-agent';
 import { supabaseFetch } from '@/lib/supabase';
-import { 
-  PrioritizationSession, 
-  OUTPUT_TYPES, 
-  OutputType,
-  RICE_OUTPUT_TYPES,
-  RICEOutputType,
-  MOSCOW_OUTPUT_TYPES,
-  MoSCoWOutputType,
-  VALUE_EFFORT_OUTPUT_TYPES,
-  ValueEffortOutputType,
-  CUSTOM_OUTPUT_TYPES,
-  CustomOutputType,
-  RICEConfig,
-  MoSCoWConfig,
-  ValueEffortConfig,
-  CustomScoringConfig,
-  CustomFactor,
-  PrioritizationModel,
-  PRIORITIZATION_MODELS,
-} from '@/types/prioritization';
+import { ProjectArtifact } from '@/types/project-artifacts';
 import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import ReactMarkdown from 'react-markdown';
 import Papa from 'papaparse';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
+import {
+  PRIORITIZATION_MODELS,
+  OUTPUT_TYPES,
+  RICE_OUTPUT_TYPES,
+  MOSCOW_OUTPUT_TYPES,
+  VALUE_EFFORT_OUTPUT_TYPES,
+  CUSTOM_OUTPUT_TYPES,
+} from '@/lib/prioritization-definitions';
+
+import type {
+  PrioritizationModel,
+  OutputType,
+  RICEConfig,
+  MoSCoWConfig,
+  ValueEffortConfig,
+  CustomScoringConfig,
+  CustomFactor,
+  RICEOutputType,
+  MoSCoWOutputType,
+  ValueEffortOutputType,
+  CustomOutputType,
+} from '@/types/prioritization';
+
+import { Lightbulb } from 'lucide-react';
+import { callPMAdvisorAgent } from '@/lib/pm-advisor';
+
 
 export default function Prioritization() {
   const navigate = useNavigate();
@@ -68,6 +75,14 @@ export default function Prioritization() {
   const [normalizeScores, setNormalizeScores] = useState(true);
   const [topNItems, setTopNItems] = useState(10);
   const [selectedOutputs, setSelectedOutputs] = useState<OutputType[]>([]);
+
+  const REQUIRED_WSJF_FIELDS = [
+  'business value',
+  'time criticality',
+  'risk reduction',
+  'job size',
+];
+
 
   // RICE Configuration State
   const [riceConfig, setRiceConfig] = useState<RICEConfig>({
@@ -114,43 +129,58 @@ export default function Prioritization() {
     topNItems: 10,
   });
 
-  // Analysis State
-  const [isCalculating, setIsCalculating] = useState(false);
-  const [currentOutput, setCurrentOutput] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<PrioritizationSession[]>([]);
-  const [isLoadingSessions, setIsLoadingSessions] = useState(true);
-  const [copiedToClipboard, setCopiedToClipboard] = useState(false);
 
-  // Error state
-  const [error, setError] = useState<string | null>(null);
+// Analysis State
+const [isCalculating, setIsCalculating] = useState(false);
+const [currentOutput, setCurrentOutput] = useState<string | null>(null);
+const [sessions, setSessions] = useState<ProjectArtifact[]>([]);
+const [isLoadingSessions, setIsLoadingSessions] = useState(true);
+const [copiedToClipboard, setCopiedToClipboard] = useState(false);
 
-  // Load session history when active project changes
-  useEffect(() => {
-    if (activeProject) {
-      loadSessions();
-    }
-  }, [activeProject]);
+// Tabs state (controls Current / Advisor / History)
+  const [activeTab, setActiveTab] = useState<'current' | 'advisor' | 'history'>('current');
 
-  const loadSessions = async () => {
-    if (!activeProject) return;
-    
-    try {
-      setIsLoadingSessions(true);
-      const data = await supabaseFetch<PrioritizationSession[]>(
-        `/prioritization_sessions?project_id=eq.${activeProject.id}&order=created_at.desc&limit=20`
-      );
-      setSessions(data);
-    } catch (error) {
-      console.error('Error loading sessions:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load session history',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsLoadingSessions(false);
-    }
-  };
+// 🔑 PM Advisor state
+const [advisorOutput, setAdvisorOutput] = useState<string>('');
+const [isRunningAdvisor, setIsRunningAdvisor] = useState(false);
+const [currentArtifactId, setCurrentArtifactId] = useState<string | null>(null);
+const [advisorError, setAdvisorError] = useState<string | null>(null);
+
+
+// Error state
+const [error, setError] = useState<string | null>(null);
+
+// Load session history
+const loadSessions = async () => {
+  if (!activeProject) return;
+
+  try {
+    setIsLoadingSessions(true);
+
+    const data = await supabaseFetch<ProjectArtifact[]>(
+      `/project_artifacts?project_id=eq.${activeProject.id}` +
+      `&artifact_type=eq.prioritization&status=eq.active&order=created_at.desc&limit=20`
+    );
+
+    setSessions(data);
+
+  } finally {
+    setIsLoadingSessions(false);
+  }
+};
+
+
+// React to active project changes
+useEffect(() => {
+  if (activeProject) {
+    loadSessions();
+  } else {
+    setSessions([]);
+    setCurrentOutput(null);
+    setError(null);
+  }
+}, [activeProject]);
+
 
   // CSV Upload Handlers
   const handleFileChange = (file: File | null) => {
@@ -184,9 +214,9 @@ export default function Prioritization() {
           const headers = results.meta.fields?.map(h => h.toLowerCase()) || [];
           
           if (selectedModel === 'WSJF') {
-            const requiredFields = ['business value', 'time criticality', 'risk reduction'];
-            const missingFields = requiredFields.filter(field => 
-              !headers.some(h => h.includes(field.replace(' ', '')))
+            const normalize = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+            const missingFields = REQUIRED_WSJF_FIELDS.filter(field =>
+              !headers.some(h => normalize(h).includes(normalize(field)))
             );
 
             if (missingFields.length > 0) {
@@ -411,9 +441,8 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
     // Only WSJF is functional for now
     if (selectedModel !== 'WSJF') {
       toast({
-        title: 'Coming Soon',
-        description: 'Multi-model logic coming soon. Currently only WSJF is functional.',
-        variant: 'default',
+        title: 'Model not yet active',
+        description: `${selectedModel} scoring is configured but not enabled yet.`,
       });
       return;
     }
@@ -438,18 +467,15 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
         'Prioritization (WSJF)',
         'prioritization',
         {
-          csv_content: csvContent,
-          initiative_name: initiativeName || undefined,
-          default_effort_scale: defaultEffortScale || undefined,
-          notes_context: notesContext || undefined,
-          effort_field_name: effortFieldName,
-          max_score_per_factor: maxScorePerFactor,
-          normalize_scores: normalizeScores,
-          top_n_items: topNItems,
+          project_id: activeProject.id,
+          project_name: activeProject.name,
+          csv_row_count: csvRowCount,
           selected_outputs: selectedOutputs,
         },
         () => calculateWSJF({
           csv_content: csvContent,
+          project_id: activeProject.id,
+          project_name: activeProject.name,
           initiative_name: initiativeName || undefined,
           default_effort_scale: defaultEffortScale || undefined,
           notes_context: notesContext || undefined,
@@ -463,28 +489,15 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
 
       console.log('✨ [Success] Received WSJF calculation results', { outputLength: result.output.length });
       setCurrentOutput(result.output);
+      setAdvisorOutput('');
+      setActiveTab('current');
+
 
       // Save to database with project_id
-      console.log('💾 [Database] Saving to prioritization_sessions table...');
-      await supabaseFetch<PrioritizationSession[]>('/prioritization_sessions', {
-        method: 'POST',
-        body: JSON.stringify({
-          initiative_name: initiativeName || null,
-          default_effort_scale: defaultEffortScale || null,
-          notes_context: notesContext || null,
-          csv_filename: csvFile?.name || null,
-          csv_row_count: csvRowCount,
-          effort_field_name: effortFieldName,
-          max_score_per_factor: maxScorePerFactor,
-          normalize_scores: normalizeScores,
-          top_n_items: topNItems,
-          selected_outputs: selectedOutputs,
-          output: result.output,
-          project_id: activeProject.id,
-          module_type: 'prioritization',
-          metadata: {},
-        }),
-      });
+      console.log('💾 [Database] Saving to project_artifacts...');
+      setCurrentArtifactId(result.artifact_id ?? null);
+
+
       console.log('💾 [Database] Saved successfully');
 
       // Refresh session history
@@ -531,10 +544,59 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
     }
   };
 
+  const buildAdvisorContext = () => currentOutput;
+
+
+  const handleRunAdvisorReview = async () => {
+  setAdvisorError(null);
+
+  if (!currentOutput || !currentArtifactId || !activeProject) {
+    setAdvisorError('Generate or load a prioritization first.');
+    return;
+  }
+
+  setIsRunningAdvisor(true);
+
+  try {
+    const advisorResult = await callPMAdvisorAgent({
+      artifact_output: buildAdvisorContext(),
+      module_type: 'prioritization',
+      project_id: activeProject.id,
+      project_name: activeProject.name,
+      source_session_table: 'project_artifacts',
+      source_session_id: currentArtifactId,
+      artifact_type: 'WSJF Prioritization',
+      selected_outputs,
+      context_artifacts: [],
+    });
+
+    await supabaseFetch(`/project_artifacts?id=eq.${currentArtifactId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        advisor_feedback: advisorResult.output,
+        advisor_reviewed_at: new Date().toISOString(),
+      }),
+    });
+
+    setAdvisorOutput(advisorResult.output);
+    setActiveTab('advisor');
+    await loadSessions();
+
+  } catch (err: any) {
+    setAdvisorError(parseErrorMessage(err));
+  } finally {
+    setIsRunningAdvisor(false);
+  }
+};
+
   // Load Session
-  const loadSession = (session: PrioritizationSession) => {
-    setCurrentOutput(session.output);
-  };
+  const loadSession = (session: ProjectArtifact) => {
+  setCurrentArtifactId(session.id);
+  setCurrentOutput(session.output_data ?? null);
+  setAdvisorOutput(session.advisor_feedback ?? '');
+};
+
+
 
   // Format Date
   const formatDate = (dateString: string) => {
@@ -1310,6 +1372,30 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                     getActionButtonLabel()
                   )}
                 </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleRunAdvisorReview}
+                  disabled={
+                      !currentOutput ||
+                      !currentArtifactId ||
+                      isRunningAdvisor ||
+                      advisorOutput.length > 0
+                    }
+                  className="w-full mt-3"
+                  size="lg"
+                >
+                  {isRunningAdvisor ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Running PM Advisor…
+                    </>
+                  ) : (
+                    <>
+                      <Lightbulb className="mr-2 h-4 w-4" />
+                      Run PM Advisor Review
+                    </>
+                  )}
+                </Button>
                 <p className="text-xs text-center text-muted-foreground">
                   Upload CSV and select at least one output type
                 </p>
@@ -1325,12 +1411,18 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
               <CardTitle>Prioritization Results</CardTitle>
             </CardHeader>
             <CardContent>
-              <Tabs defaultValue="current" className="w-full">
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="current">Current Results</TabsTrigger>
+              <Tabs
+                value={activeTab}
+                onValueChange={(v) => setActiveTab(v as 'current' | 'advisor' | 'history')}
+                className="w-full"
+              >
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="current">Current Documentation</TabsTrigger>
+                  <TabsTrigger value="advisor">Advisor Review</TabsTrigger>
                   <TabsTrigger value="history">Session History</TabsTrigger>
                 </TabsList>
 
+                {/* ================= CURRENT ================= */}
                 <TabsContent value="current" className="mt-4 space-y-4">
                   {currentOutput ? (
                     <>
@@ -1354,84 +1446,102 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                           )}
                         </Button>
                       </div>
+
                       <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
                         <ReactMarkdown>{currentOutput}</ReactMarkdown>
                       </div>
                     </>
                   ) : (
                     <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
-                      <div className="text-center">
-                        <p className="text-sm text-muted-foreground">
-                          Upload a CSV and calculate prioritization to see results.
-                        </p>
-                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        Upload a CSV and calculate prioritization to see results.
+                      </p>
                     </div>
                   )}
                 </TabsContent>
 
+                {/* ================= ADVISOR ================= */}
+                <TabsContent value="advisor" className="mt-4 space-y-4">
+                  {advisorError && (
+                    <div className="rounded-lg border border-destructive bg-destructive/5 p-4 text-sm text-destructive">
+                      {advisorError}
+                    </div>
+                  )}
+
+                  {advisorOutput ? (
+                    <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 max-h-[600px] overflow-y-auto">
+                      <ReactMarkdown>{advisorOutput}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
+                      <p className="text-sm text-muted-foreground">
+                        Run PM Advisor Review to receive feedback.
+                      </p>
+                    </div>
+                  )}
+                </TabsContent>
+
+                {/* ================= HISTORY ================= */}
                 <TabsContent value="history" className="mt-4">
-                  <div className="space-y-3">
-                    {isLoadingSessions ? (
-                      <div className="flex min-h-[400px] items-center justify-center">
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : sessions.length === 0 ? (
-                      <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
-                        <div className="text-center">
-                          <p className="text-sm text-muted-foreground">
-                            No sessions yet. Calculate your first prioritization to get started.
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="max-h-[600px] space-y-3 overflow-y-auto">
-                        {sessions.map((session) => (
-                          <Card
-                            key={session.id}
-                            className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
-                            onClick={() => loadSession(session)}
-                          >
-                            <CardContent className="p-4">
-                              <div className="space-y-2">
-                                <div className="flex items-start justify-between gap-2">
-                                  <p className="text-xs text-muted-foreground">
-                                    {formatDate(session.created_at)}
-                                  </p>
-                                  {session.csv_row_count && (
-                                    <Badge variant="secondary" className="text-xs">
-                                      {session.csv_row_count} items
+                  {isLoadingSessions ? (
+                    <div className="flex min-h-[400px] items-center justify-center">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : sessions.length === 0 ? (
+                    <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
+                      <p className="text-sm text-muted-foreground">
+                        No sessions yet. Calculate your first prioritization to get started.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="max-h-[600px] space-y-3 overflow-y-auto">
+                      {sessions.map((session) => (
+                        <Card
+                          key={session.id}
+                          className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
+                          onClick={() => {
+                            loadSession(session);
+                            setActiveTab('current'); // 👈 CRITICAL
+                          }}
+                        >
+                          <CardContent className="p-4">
+                            <div className="space-y-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-xs text-muted-foreground">
+                                  {formatDate(session.created_at)}
+                                </p>
+
+                                {session.metadata?.csv_row_count && (
+                                  <Badge variant="secondary" className="text-xs">
+                                    {session.metadata.csv_row_count} items
+                                  </Badge>
+                                )}
+                              </div>
+
+                              {session.artifact_name && (
+                                <p className="font-medium text-sm">{session.artifact_name}</p>
+                              )}
+
+                              {session.metadata?.selected_outputs?.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {session.metadata.selected_outputs.slice(0, 3).map((output) => (
+                                    <Badge key={output} variant="outline" className="text-xs">
+                                      {output}
+                                    </Badge>
+                                  ))}
+                                  {session.input_data.selected_outputs.length > 3 && (
+                                    <Badge variant="outline" className="text-xs">
+                                      +{session.input_data.selected_outputs.length - 3}
                                     </Badge>
                                   )}
                                 </div>
-                                {session.initiative_name && (
-                                  <p className="font-medium text-sm">{session.initiative_name}</p>
-                                )}
-                                {session.csv_filename && (
-                                  <p className="text-xs text-muted-foreground">
-                                    📄 {session.csv_filename}
-                                  </p>
-                                )}
-                                {session.selected_outputs.length > 0 && (
-                                  <div className="flex flex-wrap gap-1">
-                                    {session.selected_outputs.slice(0, 3).map((output) => (
-                                      <Badge key={output} variant="outline" className="text-xs">
-                                        {output}
-                                      </Badge>
-                                    ))}
-                                    {session.selected_outputs.length > 3 && (
-                                      <Badge variant="outline" className="text-xs">
-                                        +{session.selected_outputs.length - 3}
-                                      </Badge>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </CardContent>
-                          </Card>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
                 </TabsContent>
               </Tabs>
             </CardContent>

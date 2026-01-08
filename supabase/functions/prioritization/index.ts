@@ -7,271 +7,243 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
 const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 
-// UUID validation helper
+/* ------------------------------------------------------------------ */
+/* Utilities */
+/* ------------------------------------------------------------------ */
+
 function isValidUUID(uuid: string): boolean {
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  return uuidRegex.test(uuid);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid);
 }
 
-const SYSTEM_PROMPT = `You are a WSJF Prioritization Analyst specializing in backlog prioritization and strategic portfolio management.
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
+}
 
-Your role:
-- Calculate WSJF (Weighted Shortest Job First) scores
-- Evaluate Business Value, Time Criticality, and Risk Reduction
-- Normalize scores and rank items
-- Provide strategic recommendations
-- Identify dependencies and risks
+/* ------------------------------------------------------------------ */
+/* SYSTEM PROMPT */
+/* ------------------------------------------------------------------ */
 
-When calculating WSJF, you evaluate:
-- Business Value: Revenue impact, customer satisfaction, strategic alignment
-- Time Criticality: Urgency, competitive advantage, regulatory requirements
-- Risk Reduction/Opportunity Enablement: Technical debt, enabler work
-- Job Size (Effort): Development complexity and time
+const SYSTEM_PROMPT = `
+You are a senior Product Manager reviewing and synthesizing WSJF-based backlog prioritization.
 
-WSJF Score = (Business Value + Time Criticality + Risk Reduction) / Job Size
+Your job is NOT to restate calculations or raw data.
+Your job IS to help a PM make better sequencing and planning decisions.
 
-Format output in markdown with clear tables and prioritized recommendations.`;
+STRICT RULES:
+- Never reproduce the raw CSV or full tables
+- Never explain WSJF mechanics
+- Assume the reader understands prioritization frameworks
+- Focus on implications, not arithmetic
+
+WHAT YOU SHOULD DO:
+- Highlight which items rise to the top and WHY
+- Call out meaningful tradeoffs and opportunity costs
+- Identify execution risks, dependencies, and sequencing concerns
+- Provide practical next-step guidance a PM could act on
+
+OUTPUT STYLE:
+- Executive, concise, and confident
+- PM-to-PM tone (not instructional)
+- Insight-dense, not verbose
+
+REQUIRED STRUCTURE:
+1. Executive Summary
+2. Priority Highlights (Top Items Only)
+3. Key Tradeoffs & Insights
+4. Risks & Dependencies
+5. Recommended Next Actions
+
+You may reference WSJF scores selectively if they add decision value.
+Never mirror the full dataset.
+`;
+
+/* ------------------------------------------------------------------ */
+/* MAIN HANDLER */
+/* ------------------------------------------------------------------ */
 
 serve(async (req) => {
   const startTime = Date.now();
-  console.log('📥 [Edge Function] Received request to prioritization');
-  console.log('⏰ [Timestamp]', new Date().toISOString());
-  
-  // CORS headers
+
+  /* ---------------- CORS ---------------- */
   if (req.method === 'OPTIONS') {
     return new Response('ok', {
       headers: {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+        'Access-Control-Allow-Headers':
+          'authorization, x-client-info, apikey, content-type',
       },
     });
   }
 
   try {
+    if (!OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY not configured');
+    }
+
+    const payload = await req.json();
+
     const {
       csv_content,
-      effort_field_name,
-      max_score_per_factor,
-      normalize_scores,
+      effort_field_name = 'Job Size',
+      max_score_per_factor = 10,
+      normalize_scores = true,
       initiative_name,
       default_effort_scale,
       notes_context,
-      selected_outputs,
+      selected_outputs = [],
       top_n_items,
       project_id,
       project_name,
-      artifact_name
-    } = await req.json();
+      artifact_name,
+    } = payload;
 
-    console.log('📋 [Payload]', {
-      initiative_name,
-      effort_field_name,
-      max_score_per_factor,
-      normalize_scores,
-      selected_outputs,
-      top_n_items,
-      project_id,
-      project_name,
-      csv_content_length: csv_content?.length || 0,
-    });
+    /* ---------------- Validation ---------------- */
 
-    // Validation
     if (!csv_content) {
-      console.warn('⚠️ [Validation Error] Missing csv_content');
-      return new Response(
-        JSON.stringify({
-          error: 'Missing csv_content',
-          details: 'Please provide CSV content to calculate WSJF scores'
-        }),
-        { 
-          status: 400, 
-          headers: { 
-            'Content-Type': 'application/json', 
-            'Access-Control-Allow-Origin': '*' 
-          } 
-        }
+      return jsonResponse(
+        { error: 'Missing csv_content' },
+        400
       );
     }
 
-    // CRITICAL: Validate project_id is a valid UUID
     if (!project_id || !isValidUUID(project_id)) {
-      console.warn('⚠️ [Validation Error] Invalid project_id - must be UUID');
-      return new Response(
-        JSON.stringify({
-          error: 'Invalid project_id',
-          details: 'project_id must be a valid UUID string'
-        }),
-        { 
-          status: 400, 
-          headers: { 
-            'Content-Type': 'application/json', 
-            'Access-Control-Allow-Origin': '*' 
-          } 
-        }
+      return jsonResponse(
+        { error: 'project_id must be a valid UUID' },
+        400
       );
     }
 
-    // Check OpenAI API key
-    if (!OPENAI_API_KEY) {
-      console.error('🔑 [Config Error] OPENAI_API_KEY not set in environment');
-      return new Response(
-        JSON.stringify({
-          error: 'OpenAI API key not configured',
-          details: 'Please set OPENAI_API_KEY in Supabase secrets: supabase secrets set OPENAI_API_KEY=sk-...'
-        }),
-        { 
-          status: 500, 
-          headers: { 
-            'Content-Type': 'application/json', 
-            'Access-Control-Allow-Origin': '*' 
-          } 
-        }
-      );
-    }
+    /* ---------------- Prompt Assembly ---------------- */
 
-    // Build user message
-    let userMessage = `Please calculate WSJF scores for this backlog:\n\n`;
-    
-    userMessage += `CSV Content:\n${csv_content}\n\n`;
-    
-    userMessage += `Configuration:\n`;
-    userMessage += `- Effort Field Name: ${effort_field_name || 'Story Points'}\n`;
-    userMessage += `- Max Score Per Factor: ${max_score_per_factor || 10}\n`;
-    userMessage += `- Normalize Scores: ${normalize_scores ? 'Yes' : 'No'}\n`;
-    
+    let userPrompt = `
+You are reviewing a backlog for WSJF prioritization.
+
+The CSV below is provided ONLY so you can derive rankings and insights.
+DO NOT reproduce the dataset or calculations in your output.
+
+BACKLOG DATA (internal analysis only):
+${csv_content}
+
+CONFIGURATION:
+- Effort Field: ${effort_field_name}
+- Max Score Per Factor: ${max_score_per_factor}
+- Normalize Scores: ${normalize_scores ? 'Yes' : 'No'}
+`;
+
     if (initiative_name) {
-      userMessage += `- Initiative/Backlog Name: ${initiative_name}\n`;
+      userPrompt += `- Initiative Name: ${initiative_name}\n`;
     }
+
     if (default_effort_scale) {
-      userMessage += `- Default Effort Scale: ${default_effort_scale}\n`;
+      userPrompt += `- Effort Scale: ${default_effort_scale}\n`;
     }
+
     if (notes_context) {
-      userMessage += `\nAdditional Context:\n${notes_context}\n`;
-    }
-    
-    if (selected_outputs && selected_outputs.length > 0) {
-      userMessage += `\nRequested Outputs:\n`;
-      selected_outputs.forEach((output: string) => {
-        userMessage += `- ${output}\n`;
-      });
-    }
-    
-    if (selected_outputs?.includes('Top N Items Summary') && top_n_items) {
-      userMessage += `\nShow top ${top_n_items} items.\n`;
+      userPrompt += `\nCONTEXT FROM PM:\n${notes_context}\n`;
     }
 
-    console.log('🤖 [OpenAI] Calling GPT-4o...');
-    console.log('📊 [OpenAI] Message length:', userMessage.length);
+    if (selected_outputs.length > 0) {
+      userPrompt += `
+REQUESTED OUTPUT EMPHASIS:
+${selected_outputs.map((o: string) => `- ${o}`).join('\n')}
 
-    // Call OpenAI
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.7,
-        max_tokens: 4000,
-      }),
-    });
-
-    console.log('📡 [OpenAI Response]', { status: response.status, ok: response.ok });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('❌ [OpenAI Error]', error);
-      throw new Error(`OpenAI API error: ${error.error?.message || JSON.stringify(error)}`);
+Only include what materially supports these outputs.
+`;
     }
 
-    const data = await response.json();
-    const output = data.choices[0].message.content;
-    const duration = Date.now() - startTime;
+    if (
+      selected_outputs.includes('Top N Items Summary') &&
+      top_n_items
+    ) {
+      userPrompt += `\nFocus on the top ${top_n_items} items only.\n`;
+    }
 
-    console.log('✅ [Success] Generated output', { 
-      duration: `${duration}ms`, 
-      output_length: output.length,
-      tokens_used: data.usage?.total_tokens || 'N/A'
-    });
+    /* ---------------- OpenAI Call ---------------- */
 
-    // =====================================================
-    // NEW: Store in project_artifacts table
-    // =====================================================
-    console.log('💾 [Database] Storing in project_artifacts...');
-    
+    const openaiResponse = await fetch(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: 0.6,
+          max_tokens: 3000,
+        }),
+      }
+    );
+
+    if (!openaiResponse.ok) {
+      const err = await openaiResponse.text();
+      throw new Error(`OpenAI error: ${err}`);
+    }
+
+    const completion = await openaiResponse.json();
+    const output = completion.choices[0].message.content;
+    const durationMs = Date.now() - startTime;
+
+    /* ---------------- Persist Artifact ---------------- */
+
     const { data: artifact, error: dbError } = await supabase
       .from('project_artifacts')
       .insert({
-        project_id: project_id, // Use UUID directly
-        project_name: project_name || 'Unknown Project',
+        project_id,
+        project_name: project_name ?? 'Unknown Project',
         artifact_type: 'prioritization',
-        artifact_name: artifact_name || `WSJF Analysis - ${new Date().toLocaleDateString()}`,
+        artifact_name:
+          artifact_name ??
+          `WSJF Prioritization – ${new Date().toLocaleDateString()}`,
         input_data: {
-          csv_content,
+          initiative_name,
           effort_field_name,
           max_score_per_factor,
           normalize_scores,
-          initiative_name,
-          default_effort_scale,
-          notes_context
+          selected_outputs,
+          top_n_items,
         },
         output_data: output,
         metadata: {
-          initiative_name,
-          selected_outputs,
-          top_n_items,
-          tokens_used: data.usage?.total_tokens,
-          duration_ms: duration
+          model: 'WSJF',
+          tokens_used: completion.usage?.total_tokens,
+          duration_ms: durationMs,
         },
-        status: 'active'
+        status: 'active',
+        advisor_feedback: null,
+        advisor_reviewed_at: null,
       })
       .select()
       .single();
 
     if (dbError) {
-      console.error('❌ [Database Error]', dbError);
-    } else {
-      console.log('✅ [Database] Artifact saved', { artifact_id: artifact?.id });
+      console.error('[DB ERROR]', dbError);
     }
 
-    return new Response(
-      JSON.stringify({ 
-        output,
-        artifact_id: artifact?.id 
-      }),
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      }
-    );
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error('💥 [Error]', { 
-      error: error.message, 
-      duration: `${duration}ms`,
-      stack: error.stack 
-    });
+    /* ---------------- Response ---------------- */
 
-    return new Response(
-      JSON.stringify({
-        error: error.message || 'Unknown error',
-        details: error.toString()
-      }),
+    return jsonResponse({
+      output,
+      artifact_id: artifact?.id,
+    });
+  } catch (err: any) {
+    console.error('[PRIORITIZATION ERROR]', err);
+    return jsonResponse(
       {
-        status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      }
+        error: err.message ?? 'Unknown error',
+      },
+      500
     );
   }
 });

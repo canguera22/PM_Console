@@ -1,6 +1,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+const FUNCTION_VERSION = 'pm-advisor@2025-12-19.2';
+
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -23,7 +25,7 @@ function corsHeaders() {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers':
       'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS', // ✅ recommended
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Content-Type': 'application/json',
   };
 }
@@ -54,7 +56,6 @@ function compressLargeArtifact(text: string, head = 6000, tail = 3000) {
  * Pick context artifacts as "best-of by type":
  * - Up to `perType` artifacts per artifact_type (newest first)
  * - Max total `maxTotal`
- * Also excludes pm_advisor artifacts by default (handled by query too).
  */
 function pickArtifactsByType(projectArtifacts: any[], perType = 2, maxTotal = 12) {
   if (!Array.isArray(projectArtifacts) || projectArtifacts.length === 0) return [];
@@ -67,7 +68,7 @@ function pickArtifactsByType(projectArtifacts: any[], perType = 2, maxTotal = 12
   }
 
   const picked: any[] = [];
-  for (const [type, arr] of grouped.entries()) {
+  for (const [, arr] of grouped.entries()) {
     arr.sort((a, b) => {
       const ta = new Date(a?.created_at || 0).getTime();
       const tb = new Date(b?.created_at || 0).getTime();
@@ -131,6 +132,7 @@ Your output will be used to decide what engineers build next. You must be:
 Hard Rules (do not violate):
 1) NO HALLUCINATION: If something is not present in the artifact or provided context, say: "Not verifiable from provided artifacts."
 2) EVIDENCE: Any cross-artifact consistency claim MUST cite at least one artifact reference from the "Project Artifact Index" (by artifact_id).
+   - Citation format required: (artifact_id: <uuid>)
 3) ARCHITECTURE GROUNDING: When recommending changes, tie them to the actual system:
    - Supabase Edge Functions
    - project_artifacts table keyed by project_id (UUID)
@@ -148,25 +150,89 @@ You MUST include a scorecard at the top with these three scores (0-10):
 Each score needs 1-2 sentences explaining why.
 
 Required Output Sections (in this exact order, always):
-1) Scorecard (3 scores)
-2) Executive Verdict (Pass / Pass with Feedback / Needs Revision)
-3) Artifact Summary (what it claims, in 5-10 bullets)
-4) Correctness & Completeness Checks (missing sections, contradictions, vague requirements)
-5) Architecture & Data Contract Alignment
-   - Must reference: project_id UUID, project_artifacts, edge function payload/response, persistence expectations
-6) Cross-Artifact Consistency (must cite artifact_id(s) or say Not verifiable)
-7) Engineering Action Plan
-   - TABLE REQUIRED with columns:
-     Task | Location | Owner (PM/FE/BE/Data/DevOps) | Priority (P0/P1/P2) | Effort (S/M/L) | Acceptance Criteria | Verification (Unit/E2E/Manual/DB Query)
-8) Recommended Edits (write “replace/add” instructions that a PM can paste back into the artifact)
-9) Open Questions (only questions that block correctness)
+## 1) Scorecard
+## 2) Executive Verdict
+## 3) Artifact Summary
+## 4) Correctness & Completeness Checks
+## 5) Architecture & Data Contract Alignment
+## 6) Cross-Artifact Consistency
+## 7) Engineering Action Plan
+## 8) Recommended Edits
+## 9) Open Questions
+
+Section 7 requirements:
+- TABLE REQUIRED with columns:
+  Task | Location | Owner (PM/FE/BE/Data/DevOps) | Priority (P0/P1/P2) | Effort (S/M/L) | Acceptance Criteria | Verification (Unit/E2E/Manual/DB Query)
 
 Tone: direct, precise, build-oriented. Output in Markdown.`;
+
+/**
+ * Compliance gate: enforce required section headings and the presence of a markdown table in section 7.
+ * We intentionally check headings with the exact "## X) ..." form because that is what you want displayed/stored.
+ */
+function isCompliant(output: string): { ok: boolean; reasons: string[] } {
+  const text = String(output || '');
+  const reasons: string[] = [];
+
+  const requiredHeadings = [
+    '## 1) Scorecard',
+    '## 2) Executive Verdict',
+    '## 3) Artifact Summary',
+    '## 4) Correctness & Completeness Checks',
+    '## 5) Architecture & Data Contract Alignment',
+    '## 6) Cross-Artifact Consistency',
+    '## 7) Engineering Action Plan',
+    '## 8) Recommended Edits',
+    '## 9) Open Questions',
+  ];
+
+  for (const h of requiredHeadings) {
+    if (!text.includes(h)) reasons.push(`Missing heading: ${h}`);
+  }
+
+  // Basic markdown table detection (pipes + separator row)
+  const hasTable = /\|.+\|.+\|/.test(text) && /\|\s*-{2,}\s*\|/.test(text);
+  if (!hasTable) reasons.push('Missing markdown table (required in Section 7)');
+
+  return { ok: reasons.length === 0, reasons };
+}
+
+async function callOpenAIChat({
+  system,
+  user,
+  temperature,
+  maxTokens,
+}: {
+  system: string;
+  user: string;
+  temperature: number;
+  maxTokens: number;
+}) {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      temperature,
+      max_tokens: maxTokens,
+    }),
+  });
+
+  return response;
+}
 
 // Main handler
 serve(async (req) => {
   const startTime = Date.now();
   console.log('📥 [Edge Function] Received request to pm-advisor');
+  console.log('🧩 [Version]', FUNCTION_VERSION);
   console.log('⏰ [Timestamp]', new Date().toISOString());
 
   // CORS preflight
@@ -186,7 +252,6 @@ serve(async (req) => {
       selected_outputs,
       project_id,
       artifact_name,
-      // context_artifacts param intentionally unused — canonical context is DB-backed
     } = body;
 
     console.log('📋 [Payload]', {
@@ -225,7 +290,7 @@ serve(async (req) => {
     }
 
     // Fetch artifacts for this project (canonical context)
-    // ✅ Exclude pm_advisor artifacts from context to prevent recursive loops
+    // Exclude pm_advisor artifacts from context to prevent recursive loops
     console.log('🔍 [Database] Fetching project artifacts (excluding pm_advisor)...');
     const { data: rawArtifacts, error: fetchError } = await supabase
       .from('project_artifacts')
@@ -248,8 +313,6 @@ serve(async (req) => {
 
     // If artifact_output missing, try to load by artifact_id
     if ((!artifactToReview || String(artifactToReview).trim() === '') && artifact_id) {
-      // Note: reviewed artifact could be a pm_advisor artifact (rare) but typically not.
-      // If you want to allow reviewing pm_advisor items, we'd need a second fetch that includes it.
       const match = allArtifacts.find((a: any) => a.id === artifact_id);
       if (match) {
         artifactToReview = match.output_data;
@@ -268,63 +331,61 @@ serve(async (req) => {
       );
     }
 
-    // Compress very large artifacts to avoid token blowups
+    // Compress very large artifacts
     const artifactForPrompt = compressLargeArtifact(artifactToReview);
 
-    // ✅ Pick context artifacts by type (best-of)
+    // Pick context artifacts by type (best-of)
     const pickedContext = pickArtifactsByType(allArtifacts, 2, 12);
     const { indexText, included } = buildArtifactIndex(pickedContext);
 
     // Build user message (tight + architecture-grounded)
-    let userMessage = `You are reviewing a PM artifact within a specific architecture.\n\n`;
+    let userMessage = `You are reviewing a PM artifact within a specific architecture.
 
-    userMessage += `## Architecture Ground Truth (must be referenced)\n`;
-    userMessage += `- Frontend: React/Vite calling Supabase Edge Functions via supabase.functions.invoke\n`;
-    userMessage += `- Persistence: Postgres on Supabase\n`;
-    userMessage += `- Central store: project_artifacts (keyed by project_id UUID) with fields: project_id, project_name, artifact_type, artifact_name, input_data(JSONB), output_data(TEXT), metadata(JSONB), advisor_feedback, advisor_reviewed_at, status\n`;
-    userMessage += `- This pm-advisor function loads DB-backed artifacts for context and stores its review back into project_artifacts.\n\n`;
+## Architecture Ground Truth (must be referenced)
+- Frontend: React/Vite calling Supabase Edge Functions via supabase.functions.invoke
+- Persistence: Postgres on Supabase
+- Central store: project_artifacts (keyed by project_id UUID) with fields:
+  project_id, project_name, artifact_type, artifact_name, input_data(JSONB), output_data(TEXT), metadata(JSONB),
+  advisor_feedback, advisor_reviewed_at, status
+- This pm-advisor function loads DB-backed artifacts for context and stores its review back into project_artifacts.
 
-    userMessage += `## Review Target\n`;
-    userMessage += `- project_id: ${project_id}\n`;
-    userMessage += `- project_name: ${project_name || '(not provided)'}\n`;
-    userMessage += `- module_type: ${module_type || '(not provided)'}\n`;
-    userMessage += `- artifact_type (declared): ${artifact_type || '(not provided)'}\n`;
-    userMessage += `- reviewed_artifact_id: ${artifact_id || '(not provided)'}\n`;
+## Review Target
+- project_id: ${project_id}
+- project_name: ${project_name || '(not provided)'}
+- module_type: ${module_type || '(not provided)'}
+- artifact_type (declared): ${artifact_type || '(not provided)'}
+- reviewed_artifact_id: ${artifact_id || '(not provided)'}
+`;
+
     if (selected_outputs && Array.isArray(selected_outputs) && selected_outputs.length > 0) {
       userMessage += `- selected_outputs:\n${selected_outputs.map((o: string) => `  - ${o}`).join('\n')}\n`;
     }
-    userMessage += `\n`;
 
-    userMessage += `## Artifact Content (to review)\n`;
-    userMessage += `\`\`\`markdown\n${artifactForPrompt}\n\`\`\`\n\n`;
+    userMessage += `
 
-    userMessage += `## Project Artifact Index (you MUST cite artifact_id for cross-artifact claims)\n`;
-    userMessage += `${indexText}\n\n`;
+## Artifact Content (to review)
+\`\`\`markdown
+${artifactForPrompt}
+\`\`\`
 
-    userMessage += `Important constraints:\n`;
-    userMessage += `- Any cross-artifact statement must cite artifact_id(s) from the index above.\n`;
-    userMessage += `- If you cannot verify something from the artifact(s), explicitly say: "Not verifiable from provided artifacts."\n`;
-    userMessage += `- Focus on build-ready actionability and architecture alignment.\n`;
+## Project Artifact Index (you MUST cite artifact_id for cross-artifact claims)
+${indexText}
+
+Important constraints:
+- Any cross-artifact statement must cite artifact_id(s) from the index above in the form: (artifact_id: <uuid>)
+- If you cannot verify something from the artifact(s), explicitly say: "Not verifiable from provided artifacts."
+- Output MUST include headings exactly as specified in SYSTEM prompt (## 1) ... through ## 9) ...), and section 7 MUST include the required markdown table.
+`;
 
     console.log('🤖 [OpenAI] Calling GPT-4o for PM Advisor review...');
     console.log('📊 [OpenAI] Message length:', userMessage.length);
 
-    // Call OpenAI (lower temp for correctness + build focus)
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.25,
-        max_tokens: 4500,
-      }),
+    // First pass
+    const response = await callOpenAIChat({
+      system: SYSTEM_PROMPT,
+      user: userMessage,
+      temperature: 0.2,
+      maxTokens: 4500,
     });
 
     console.log('📡 [OpenAI Response]', { status: response.status, ok: response.ok });
@@ -336,14 +397,75 @@ serve(async (req) => {
     }
 
     const data = await response.json();
-    const output = data.choices[0].message.content;
-    const duration = Date.now() - startTime;
+    let output: string = data.choices?.[0]?.message?.content || '';
+    const durationFirst = Date.now() - startTime;
 
-    console.log('✅ [Success] Generated PM Advisor feedback', {
-      duration: `${duration}ms`,
+    console.log('✅ [Success] Generated PM Advisor feedback (pass 1)', {
+      duration: `${durationFirst}ms`,
       output_length: output.length,
       tokens_used: data.usage?.total_tokens || 'N/A',
     });
+
+    // Compliance gate + single rewrite pass
+    const compliance = isCompliant(output);
+    if (!compliance.ok) {
+      console.warn('⚠️ [Format] Non-compliant output. Reasons:', compliance.reasons);
+
+      const rewriteMessage = `${userMessage}
+
+---
+
+You MUST rewrite your output to comply EXACTLY with the required format.
+
+Rules for rewrite:
+- Output MUST include these headings exactly and in order:
+  ## 1) Scorecard
+  ## 2) Executive Verdict
+  ## 3) Artifact Summary
+  ## 4) Correctness & Completeness Checks
+  ## 5) Architecture & Data Contract Alignment
+  ## 6) Cross-Artifact Consistency
+  ## 7) Engineering Action Plan
+  ## 8) Recommended Edits
+  ## 9) Open Questions
+
+- Section 7 MUST include a markdown table with columns:
+  Task | Location | Owner (PM/FE/BE/Data/DevOps) | Priority (P0/P1/P2) | Effort (S/M/L) | Acceptance Criteria | Verification (Unit/E2E/Manual/DB Query)
+
+- If you cannot back a cross-artifact claim with an artifact_id from the index above, write:
+  "Not verifiable from provided artifacts."
+
+Rewrite the following prior output (do not add fluff):
+\`\`\`markdown
+${output}
+\`\`\`
+`;
+
+      const rewriteResp = await callOpenAIChat({
+        system: SYSTEM_PROMPT,
+        user: rewriteMessage,
+        temperature: 0.1,
+        maxTokens: 4500,
+      });
+
+      if (rewriteResp.ok) {
+        const rewriteData = await rewriteResp.json();
+        const rewritten = rewriteData.choices?.[0]?.message?.content || '';
+        const compliance2 = isCompliant(rewritten);
+
+        if (compliance2.ok) {
+          output = rewritten;
+          console.log('✅ [Format] Rewrite succeeded');
+        } else {
+          console.warn('⚠️ [Format] Rewrite still non-compliant. Reasons:', compliance2.reasons);
+          // Return best effort (original) but at least logged.
+        }
+      } else {
+        console.warn('⚠️ [Format] Rewrite call failed; keeping original output');
+      }
+    }
+
+    const duration = Date.now() - startTime;
 
     // Store PM Advisor feedback in project_artifacts
     console.log('💾 [Database] Storing PM Advisor feedback...');
@@ -363,17 +485,18 @@ serve(async (req) => {
           selected_outputs: Array.isArray(selected_outputs) ? selected_outputs : null,
           context_artifacts_count: pickedContext.length,
           included_context_artifact_ids: included.map((a: any) => a.id),
+          function_version: FUNCTION_VERSION,
         },
         output_data: output,
         metadata: {
-          // ✅ makes dashboard categorization easier later
           category: 'pm_review',
+          function_version: FUNCTION_VERSION,
           module_type: module_type || null,
           reviewed_artifact_id: artifact_id || null,
           tokens_used: data.usage?.total_tokens,
           duration_ms: duration,
           model: 'gpt-4o',
-          temperature: 0.25,
+          temperature: 0.2,
           context_artifacts: included.map((a: any) => ({
             id: a.id,
             type: a.type,
@@ -394,18 +517,7 @@ serve(async (req) => {
       });
     }
 
-    // Optionally update the reviewed artifact with advisor feedback
-    if (artifact_id && !dbError) {
-      console.log('💾 [Database] Updating reviewed artifact with advisor feedback reference...');
-
-      const { error: updateError } = await supabase
-        .from('project_artifacts')
-        .update({
-          advisor_feedback: output,
-          advisor_reviewed_at: new Date().toISOString(),
-        })
-        .eq('id', artifact_id);
-
+    // Update the reviewed artifact with advisor feedback (optional)
       if (updateError) {
         console.error('❌ [Database Error] Failed to update artifact', updateError);
       } else {
@@ -418,6 +530,7 @@ serve(async (req) => {
         output,
         artifact_id: advisorArtifact?.id,
         context_artifacts_count: pickedContext.length,
+        function_version: FUNCTION_VERSION,
       }),
       { status: 200, headers: corsHeaders() }
     );
@@ -433,6 +546,7 @@ serve(async (req) => {
       JSON.stringify({
         error: error?.message || 'Unknown error',
         details: String(error),
+        function_version: FUNCTION_VERSION,
       }),
       { status: 500, headers: corsHeaders() }
     );
