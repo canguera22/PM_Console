@@ -44,24 +44,35 @@ export function CreateProjectModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Validate
+
+    console.log('🟢 [CreateProjectModal] Submit clicked', {
+      name,
+      description,
+      status,
+    });
+
     if (!name.trim()) {
       setNameError('Project name is required');
+      console.warn('⚠️ [CreateProjectModal] Missing project name');
       return;
     }
 
     setIsSubmitting(true);
+
     try {
+      console.log('🟡 [CreateProjectModal] Calling createProject()');
+
       const project = await createProject(
         name.trim(),
         description.trim() || undefined,
         status
       );
 
+      console.log('🟢 [CreateProjectModal] Project created:', project);
+
       toast({
-        title: 'Success',
-        description: `Project "${project.name}" created and set as active`,
+        title: 'Project created',
+        description: `"${project.name}" is now your active project`,
       });
 
       onProjectCreated({
@@ -70,17 +81,20 @@ export function CreateProjectModal({
         description: project.description,
       });
 
-      // Reset form
+      // Reset + close
       setName('');
       setDescription('');
       setStatus('Active');
       setNameError('');
       onOpenChange(false);
-    } catch (error) {
-      console.error('Error creating project:', error);
+    } catch (error: any) {
+      console.error('❌ [CreateProjectModal] createProject failed', error);
+
       toast({
-        title: 'Error',
-        description: 'Failed to create project. Please try again.',
+        title: 'Failed to create project',
+        description:
+          error?.message ||
+          'An unexpected error occurred while creating the project.',
         variant: 'destructive',
       });
     } finally {
@@ -110,7 +124,10 @@ export function CreateProjectModal({
 
           <div className="space-y-5 py-6">
             <div className="space-y-2">
-              <Label htmlFor="project-name" className="text-[13px] font-medium text-[#6B7280]">
+              <Label
+                htmlFor="project-name"
+                className="text-[13px] font-medium text-[#6B7280]"
+              >
                 Project Name <span className="text-[#EF4444]">*</span>
               </Label>
               <Input
@@ -126,7 +143,10 @@ export function CreateProjectModal({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="project-description" className="text-[13px] font-medium text-[#6B7280]">
+              <Label
+                htmlFor="project-description"
+                className="text-[13px] font-medium text-[#6B7280]"
+              >
                 Description (Optional)
               </Label>
               <Textarea
@@ -139,10 +159,18 @@ export function CreateProjectModal({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="project-status" className="text-[13px] font-medium text-[#6B7280]">
+              <Label
+                htmlFor="project-status"
+                className="text-[13px] font-medium text-[#6B7280]"
+              >
                 Status
               </Label>
-              <Select value={status} onValueChange={(v) => setStatus(v as 'Active' | 'Archived')}>
+              <Select
+                value={status}
+                onValueChange={(v) =>
+                  setStatus(v as 'Active' | 'Archived')
+                }
+              >
                 <SelectTrigger id="project-status">
                   <SelectValue />
                 </SelectTrigger>
