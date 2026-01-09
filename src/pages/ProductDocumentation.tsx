@@ -23,6 +23,8 @@ import { callPMAdvisorAgent, fetchContextArtifacts, saveAdvisorReview } from '@/
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 
+
+
 // Lightweight row type for project_artifacts
 type ProjectArtifactRow = {
   id: string;
@@ -39,12 +41,17 @@ type ProjectArtifactRow = {
   status: 'active' | 'archived' | 'deleted';
 };
 
+// Input toggle
+type InputMode = 'manual' | 'jira_csv';
+
 export default function ProductDocumentation() {
   const navigate = useNavigate();
   const { activeProject } = useActiveProject();
+  const [inputMode, setInputMode] = useState<InputMode>('manual');
   const [isGenerating, setIsGenerating] = useState(false);
 
   const [formData, setFormData] = useState<DocumentationFormData>({
+    input_name: '',
     problem_statement: '',
     target_user_persona: '',
     business_goals: '',
@@ -94,6 +101,7 @@ export default function ProductDocumentation() {
       id: a.id as any, // in case your DocumentationSession.id is typed as number; better to update it to string later
       created_at: a.created_at,
 
+      input_name: input.input_name ?? '',
       problem_statement: input.problem_statement ?? '',
       target_user_persona: input.target_user_persona ?? '',
       business_goals: input.business_goals ?? '',
@@ -147,6 +155,7 @@ export default function ProductDocumentation() {
 
   const isFormValid = () => {
     const requiredFields: (keyof DocumentationFormData)[] = [
+      'input_name',
       'problem_statement',
       'target_user_persona',
       'business_goals',
@@ -205,7 +214,7 @@ export default function ProductDocumentation() {
 
       // Save to project_artifacts (canonical store)
       console.log('💾 [Database] Saving to project_artifacts table...');
-      const artifactName = `PRD: ${formData.problem_statement.slice(0, 60).trim()}${formData.problem_statement.length > 60 ? '…' : ''}`;
+      const artifactName = formData.input_name.trim();
 
       const saved = await supabaseFetch<ProjectArtifactRow[]>('/project_artifacts', {
         method: 'POST',
@@ -215,6 +224,7 @@ export default function ProductDocumentation() {
           artifact_type: 'product_documentation',
           artifact_name: artifactName,
           input_data: {
+            input_name: formData.input_name,
             ...formData,
             selected_outputs: selectedOutputs,
           },
@@ -350,6 +360,7 @@ export default function ProductDocumentation() {
 
   const loadSession = (session: DocumentationSession) => {
     setFormData({
+      input_name: session.input_name,
       problem_statement: session.problem_statement,
       target_user_persona: session.target_user_persona,
       business_goals: session.business_goals,
@@ -414,24 +425,74 @@ export default function ProductDocumentation() {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Left Panel - Input Form */}
           <div className="lg:col-span-4">
-            <ErrorDisplay error={error} onDismiss={() => setError(null)} />
+              <ErrorDisplay error={error} onDismiss={() => setError(null)} />
 
-            <Card>
+              <Card>
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg font-semibold text-[#111827]">Product Information</CardTitle>
                 <CardDescription className="text-sm text-[#6B7280]">
                   Fill in the details about your product. Fields marked with * are required.
                 </CardDescription>
               </CardHeader>
+
               <CardContent>
                 <ScrollArea className="h-[calc(100vh-300px)]">
                   <div className="space-y-4 pr-4">
-                    {/* Section 1: Problem Definition */}
-                    <Collapsible defaultOpen>
-                      <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
-                        Problem Definition
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="mt-3 space-y-4">
+
+                    {/* Input Mode Toggle */}
+                    <div className="mb-6">
+                      <Label className="text-[13px] font-medium text-[#6B7280] mb-2 block">
+                        Input Source
+                      </Label>
+
+                      <div className="flex rounded-lg border border-[#E5E7EB] overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setInputMode('manual')}
+                          className={`flex-1 px-4 py-2 text-sm font-medium ${
+                            inputMode === 'manual'
+                              ? 'bg-[#3B82F6] text-white'
+                              : 'bg-white text-[#374151]'
+                          }`}
+                        >
+                          Manual Entry
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setInputMode('jira_csv')}
+                          className={`flex-1 px-4 py-2 text-sm font-medium ${
+                            inputMode === 'jira_csv'
+                              ? 'bg-[#3B82F6] text-white'
+                              : 'bg-white text-[#374151]'
+                          }`}
+                        >
+                          Upload Jira CSV
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Artifact Name */}
+                    <div className="mb-6">
+                      <Label htmlFor="input_name">
+                        Artifact Name <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        id="input_name"
+                        value={formData.input_name}
+                        onChange={(e) => handleInputChange('input_name', e.target.value)}
+                      />
+                    </div>
+
+                    {/* MANUAL MODE */}
+                    {inputMode === 'manual' && (
+                      <>
+                        <Collapsible defaultOpen>
+                          <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
+                            Problem Definition
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="mt-3 space-y-4">
+
                         <div>
                           <Label htmlFor="problem_statement" className="text-[13px] font-medium text-[#6B7280]">
                             Problem Statement *
@@ -473,7 +534,6 @@ export default function ProductDocumentation() {
                         </div>
                       </CollapsibleContent>
                     </Collapsible>
-
                     {/* Section 2: Goals & Context */}
                     <Collapsible defaultOpen>
                       <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
@@ -623,6 +683,7 @@ export default function ProductDocumentation() {
                             className="mt-1.5"
                           />
                         </div>
+
                         <div>
                           <Label htmlFor="epic_impact" className="text-[13px] font-medium text-[#6B7280]">
                             Epic Impact Statement
@@ -638,12 +699,26 @@ export default function ProductDocumentation() {
                         </div>
                       </CollapsibleContent>
                     </Collapsible>
-                  </div>
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          </div>
+                    </>
+                    )}
 
+                  {/* CSV MODE — MUST BE SIBLING, NOT NESTED */}
+                  {inputMode === 'jira_csv' && (
+                    <Card className="border-dashed">
+                      <CardContent className="py-6 text-center space-y-3">
+                        <p className="text-sm font-medium">Upload Jira CSV (coming next)</p>
+                        <p className="text-xs text-gray-500">
+                          This will allow you to generate user stories from Jira epics.
+                        </p>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+          </div>
           {/* Middle Panel - Output Selection */}
           <div className="lg:col-span-3">
             <Card>

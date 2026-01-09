@@ -1,6 +1,7 @@
 export interface DocumentationSession {
   id: string;
   created_at: string;
+  input_name: string;
   problem_statement: string;
   updated_at?: string;
   project_id?: string;
@@ -23,6 +24,7 @@ export interface DocumentationSession {
 }
 
 export interface DocumentationFormData {
+  input_name: string;
   problem_statement: string;
   target_user_persona: string;
   business_goals: string;
