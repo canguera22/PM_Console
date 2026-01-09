@@ -39,7 +39,7 @@ export function CreateProjectModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [status, setStatus] = useState<'Active' | 'Archived'>('Active');
+  const [status, setStatus] = useState<'active' | 'archived'>('active');
   const [nameError, setNameError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -84,7 +84,7 @@ export function CreateProjectModal({
       // Reset + close
       setName('');
       setDescription('');
-      setStatus('Active');
+      setStatus('active');
       setNameError('');
       onOpenChange(false);
     } catch (error: any) {
@@ -168,15 +168,15 @@ export function CreateProjectModal({
               <Select
                 value={status}
                 onValueChange={(v) =>
-                  setStatus(v as 'Active' | 'Archived')
+                  setStatus(v as 'active' | 'archived')
                 }
               >
                 <SelectTrigger id="project-status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Active">Active</SelectItem>
-                  <SelectItem value="Archived">Archived</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="archived">Archived</SelectItem>
                 </SelectContent>
               </Select>
             </div>
