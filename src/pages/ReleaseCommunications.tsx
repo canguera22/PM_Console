@@ -55,6 +55,41 @@ type ProjectArtifact = {
   advisor_reviewed_at: string | null;
 };
 
+type OutputSection = {
+  id: string;        // stable key for React
+  title: string;     // extracted from "# ..."
+  content: string;   // markdown for that section
+};
+
+function splitAgentOutputIntoSections(output: string, preferredTitles: string[] = []): OutputSection[] {
+  if (!output || !output.trim()) return [];
+
+  const rawSections = output
+    .split(/\n\s*---\s*\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return rawSections.map((content, idx) => {
+    const firstLine = content.split('\n')[0]?.trim() ?? '';
+    const h1Match = firstLine.match(/^#\s+(.*)$/);
+
+    // If the model gave us a usable H1, use it.
+    // Otherwise, fall back to the selected output name for that index.
+    const inferred = h1Match?.[1]?.trim();
+    const fallback = preferredTitles[idx] ?? `Section ${idx + 1}`;
+
+    const title = inferred && inferred.length > 0 ? inferred : fallback;
+
+    return {
+      id: `${idx}`, // keep stable + simple
+      title,
+      content,
+    };
+  });
+}
+
+
+
 // Helper: ensure values from DB are valid OutputType values
 function coerceSelectedOutputs(values: any): OutputType[] {
   if (!Array.isArray(values)) return [];
@@ -76,6 +111,7 @@ export default function ReleaseCommunications() {
   const [isDragging, setIsDragging] = useState(false);
   const [isParsingCsv, setIsParsingCsv] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
+  
 
   // Form state
   const [releaseName, setReleaseName] = useState('');
@@ -86,6 +122,8 @@ export default function ReleaseCommunications() {
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentOutput, setCurrentOutput] = useState<string | null>(null);
+  const [outputSections, setOutputSections] = useState<OutputSection[]>([]);
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ProjectArtifact[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [copiedToClipboard, setCopiedToClipboard] = useState(false);
@@ -100,18 +138,37 @@ export default function ReleaseCommunications() {
   const [advisorError, setAdvisorError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (activeProject) loadSessions();
-    else {
-      setSessions([]);
-      setCurrentOutput(null);
-      setCurrentArtifactId(null);
-      setAdvisorOutput('');
-      setAdvisorError(null);
-      setError(null);
-    }
+  if (activeProject) loadSessions();
+  else {
+    setSessions([]);
+    setCurrentOutput(null);
+    setCurrentArtifactId(null);
+    setAdvisorOutput('');
+    setAdvisorError(null);
+    setError(null);
+    setOutputSections([]);    
+    setActiveSectionId(null);   
+  }
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject?.id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [activeProject?.id]);
+
+
+      useEffect(() => {
+        if (!currentOutput) {
+          setOutputSections([]);
+          setActiveSectionId(null);
+          return;
+        }
+
+        const sections = splitAgentOutputIntoSections(currentOutput, selectedOutputs);
+        setOutputSections(sections);
+        setActiveSectionId((prev) => {
+          if (prev && sections.some((s) => s.id === prev)) return prev;
+          return sections[0]?.id ?? null;
+        });
+      }, [currentOutput]);
+
 
   const loadSessions = async () => {
   if (!activeProject) return;
@@ -177,6 +234,12 @@ export default function ReleaseCommunications() {
     setParsedCsv(null);
     setParseError(null);
     setIsParsingCsv(true);
+    setSelectedOutputs([]);
+    setCurrentOutput(null);
+    setAdvisorOutput('');
+    setCurrentArtifactId(null);
+    setOutputSections([]);
+    setActiveSectionId(null);
 
     const reader = new FileReader();
 
@@ -443,16 +506,21 @@ await loadSessions();
   };
 
   const handleCopyToClipboard = async () => {
-    if (!currentOutput) return;
-    try {
-      await navigator.clipboard.writeText(currentOutput);
-      setCopiedToClipboard(true);
-      toast({ title: 'Copied!', description: 'Release documentation copied to clipboard' });
-      setTimeout(() => setCopiedToClipboard(false), 2000);
-    } catch {
-      toast({ title: 'Error', description: 'Failed to copy to clipboard', variant: 'destructive' });
-    }
-  };
+  if (!currentOutput) return;
+
+  try {
+    const active = outputSections.find((s) => s.id === activeSectionId);
+    const textToCopy = active?.content ?? currentOutput;
+
+    await navigator.clipboard.writeText(textToCopy);
+    setCopiedToClipboard(true);
+    toast({ title: 'Copied!', description: 'Release documentation copied to clipboard' });
+    setTimeout(() => setCopiedToClipboard(false), 2000);
+  } catch {
+    toast({ title: 'Error', description: 'Failed to copy to clipboard', variant: 'destructive' });
+  }
+};
+
 
     const loadSession = (session: ProjectArtifact) => {
   setError(null);
@@ -585,9 +653,12 @@ await loadSessions();
                   type="file"
                   accept=".csv"
                   onChange={handleFileInputChange}
-                  className="absolute inset-0 z-10 cursor-pointer opacity-0"
+                  className={`absolute inset-0 z-10 cursor-pointer opacity-0 ${
+                    csvFile ? 'pointer-events-none' : ''
+                  }`}
                   id="csv-upload"
                 />
+
                 <div className="flex flex-col items-center justify-center p-8 text-center">
                   {csvFile ? (
                     <>
@@ -604,6 +675,7 @@ await loadSessions();
                         variant="ghost"
                         size="sm"
                         onClick={(e) => {
+                          e.preventDefault();
                           e.stopPropagation();
                           clearFile();
                         }}
@@ -780,9 +852,45 @@ await loadSessions();
                           )}
                         </Button>
                       </div>
-                      <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
-                        <ReactMarkdown>{currentOutput}</ReactMarkdown>
-                      </div>
+
+                      {/* If we have multiple sections (Customer/Internal/Support), show section tabs */}
+                      {outputSections.length > 1 ? (
+                        <div className="space-y-3">
+                          <Tabs
+                            value={activeSectionId ?? outputSections[0]?.id}
+                            onValueChange={(val) => setActiveSectionId(val)}
+                            className="w-full"
+                          >
+                            {/* Scrollable tab row to prevent overlap */}
+                            <div className="overflow-x-auto">
+                              <TabsList className="inline-flex w-max gap-1">
+                                {outputSections.map((sec) => (
+                                  <TabsTrigger
+                                    key={sec.id}
+                                    value={sec.id}
+                                    className="whitespace-nowrap"
+                                    title={sec.title}
+                                  >
+                                    {sec.title}
+                                  </TabsTrigger>
+                                ))}
+                              </TabsList>
+                            </div>
+
+                            {outputSections.map((sec) => (
+                              <TabsContent key={sec.id} value={sec.id} className="mt-3">
+                                <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
+                                  <ReactMarkdown>{sec.content}</ReactMarkdown>
+                                </div>
+                              </TabsContent>
+                            ))}
+                          </Tabs>
+                        </div>
+                      ) : (
+                        <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
+                          <ReactMarkdown>{currentOutput}</ReactMarkdown>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
@@ -790,6 +898,7 @@ await loadSessions();
                     </div>
                   )}
                 </TabsContent>
+
 
                 <TabsContent value="advisor" className="mt-4 space-y-4">
                   {advisorOutput ? (

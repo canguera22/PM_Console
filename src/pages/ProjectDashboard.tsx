@@ -18,6 +18,8 @@ import {
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useSearchParams } from 'react-router-dom';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+
 
 
 interface ProjectArtifact {
@@ -90,6 +92,102 @@ const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
 
   return artifact.artifact_name;
 };
+
+type OutputSection = {
+  id: string;
+  title: string;
+  content: string;
+};
+
+function splitAgentOutputIntoSections(output: string): OutputSection[] {
+  if (!output || !output.trim()) return [];
+
+  const rawSections = output
+    .split(/\n\s*---\s*\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return rawSections.map((content, idx) => {
+    const firstLine = content.split('\n')[0]?.trim() ?? '';
+    const h1Match = firstLine.match(/^#\s+(.*)$/);
+
+    const title = h1Match?.[1]?.trim() || `Section ${idx + 1}`;
+
+    return {
+      id: `${idx}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      title,
+      content,
+    };
+  });
+}
+
+/**
+ * Renders one output as either:
+ * - a single markdown document, OR
+ * - multiple sections split by "---" with tabs.
+ *
+ * For release_communications artifacts, we try to name tabs using
+ * artifact.input_data.selected_outputs (Customer/Internal/Support etc.)
+ */
+function ArtifactOutputViewer({
+  output,
+  selectedOutputs,
+}: {
+  output: string;
+  selectedOutputs?: any;
+}) {
+  const sections = splitAgentOutputIntoSections(output);
+
+  // Use the user's selected output labels when possible
+  const labels: string[] = Array.isArray(selectedOutputs)
+    ? selectedOutputs.filter((x) => typeof x === 'string')
+    : [];
+
+  const finalSections = sections.map((s, idx) => {
+    const labelFromSelections = labels[idx];
+    const useLabel =
+      labelFromSelections && labelFromSelections.trim().length > 0
+        ? labelFromSelections
+        : s.title;
+
+    return { ...s, title: useLabel };
+  });
+
+  // Single doc fallback
+  if (finalSections.length <= 1) {
+    return (
+      <div className="prose max-w-none mb-6">
+        <ReactMarkdown>{output}</ReactMarkdown>
+      </div>
+    );
+  }
+
+  // Multi-tab view
+  return (
+    <div className="mb-6">
+      <Tabs defaultValue={finalSections[0].id} className="w-full">
+        <div className="overflow-x-auto">
+          <TabsList className="inline-flex w-max gap-1">
+            {finalSections.map((sec) => (
+              <TabsTrigger key={sec.id} value={sec.id} className="whitespace-nowrap">
+                {sec.title}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
+
+        {finalSections.map((sec) => (
+          <TabsContent key={sec.id} value={sec.id} className="mt-4">
+            <div className="prose max-w-none">
+              <ReactMarkdown>{sec.content}</ReactMarkdown>
+            </div>
+          </TabsContent>
+        ))}
+      </Tabs>
+    </div>
+  );
+}
+
 
 export default function ProjectDashboard() {
   const { activeProject, isLoading: projectLoading } = useActiveProject();
@@ -464,9 +562,12 @@ function ArtifactDetailModal({ artifact, config, onClose }: {
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           {/* Output */}
-          <div className="prose max-w-none mb-6">
-            <ReactMarkdown>{artifact.output_data}</ReactMarkdown>
-          </div>
+            <ArtifactOutputViewer
+              output={artifact.output_data ?? ''}
+              selectedOutputs={artifact.input_data?.selected_outputs}
+            />
+
+
           
           {/* PM Advisor Feedback */}
           {artifact.advisor_feedback && (
