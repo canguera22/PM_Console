@@ -156,6 +156,69 @@ export default function ProductDocumentation() {
   const artifactIdFromUrl = searchParams.get('artifact');
   const [inputMode, setInputMode] = useState<InputMode>('manual');
   const [isGenerating, setIsGenerating] = useState(false);
+
+  const handleSaveEdits = async () => {
+  if (!currentSessionId || !activeProject) {
+    toast.error('No active artifact to save');
+    return;
+  }
+
+  const nextVersion = currentArtifactVersion + 1;
+
+  try {
+    await supabaseFetch(`/project_artifacts?id=eq.${currentSessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        output_data: editableOutput,
+        metadata: {
+          version_number: nextVersion,
+          last_modified_by: 'user',
+          last_modified_at: new Date().toISOString(),
+        },
+      }),
+    });
+
+        if (!editingSheet) {
+      toast.error('No active output sheet');
+      return;
+    }
+
+    const updatedOutputs = {
+      ...outputByType,
+      [editingSheet]: editableOutput,
+    };
+
+    // ✅ Update tabbed outputs (this fixes editing)
+    setOutputByType(updatedOutputs);
+
+    // ✅ Keep full document in sync (advisor + legacy paths)
+    setCurrentOutput(
+      Object.values(updatedOutputs).join('\n\n')
+    );
+
+    setCurrentArtifactVersion(nextVersion);
+    setLastModifiedBy('user');
+    setEditingSheet(null);
+
+    toast.success(`Saved version v${nextVersion}`);
+    await loadSessionHistory();
+
+  } catch (err) {
+    console.error('Save failed:', err);
+    toast.error('Failed to save changes');
+  }
+};
+
+  // Editing + versioning state
+const [editingSheet, setEditingSheet] = useState<string | null>(null);
+const [editableOutput, setEditableOutput] = useState('');
+type EditViewMode = 'edit' | 'preview';
+const [editViewMode, setEditViewMode] = useState<EditViewMode>('edit');
+
+const [currentArtifactVersion, setCurrentArtifactVersion] = useState<number>(1);
+const [lastModifiedBy, setLastModifiedBy] = useState<'agent' | 'user'>('agent');
+
+
   // CSV upload state (for jira_csv mode)
 const [csvFile, setCsvFile] = useState<File | null>(null);
 const [csvData, setCsvData] = useState<string>('');
@@ -334,6 +397,9 @@ const handleDrop = useCallback((e: React.DragEvent) => {
   const artifactToDocumentationSession = (a: ProjectArtifactRow): DocumentationSession => {
     const input = (a.input_data ?? {}) as Record<string, any>;
     const metadata = (a.metadata ?? {}) as Record<string, any>;
+    const version = metadata.version_number ?? 1;
+    const modifiedBy = metadata.last_modified_by ?? 'agent';
+
 
     // The session model your UI expects. We derive it from input_data.
     return {
@@ -360,6 +426,8 @@ const handleDrop = useCallback((e: React.DragEvent) => {
       output: a.output_data ?? '',
       project_id: a.project_id ?? null,
       module_type: metadata.module_type ?? 'product_documentation',
+      version_number: version,
+      last_modified_by: modifiedBy,
     } as any;
   };
 
@@ -798,8 +866,27 @@ const cleanedPayload = {
       epic_impact: session.epic_impact || '',
     });
     setSelectedOutputs((session as any).selected_outputs || session.selected_outputs || []);
-    setCurrentOutput((session as any).output || session.output || '');
+    
+    const output = (session as any).output || session.output || '';
+
+    setCurrentOutput(output);
+    const parsed = parseOutputsByMarker(output);
+    setOutputByType(
+      Object.keys(parsed).length > 0
+        ? parsed
+        : { Document: output }
+    );
+    setActiveOutputSheet(Object.keys(parsed)[0] || 'Document');
+
+    setEditableOutput(output);
     setCurrentSessionId((session as any).id?.toString?.() ?? (session as any).id ?? null);
+
+    // Versioning (safe defaults)
+    setCurrentArtifactVersion((session as any).version_number ?? 1);
+    setLastModifiedBy((session as any).last_modified_by ?? 'agent');
+
+    setEditingSheet(null);
+
     setAdvisorOutput('');
     toast.success('Session loaded');
   };
@@ -1333,7 +1420,15 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
           <div className="lg:col-span-5">
             <Card className="h-[calc(100vh-180px)]">
               <CardHeader className="pb-3">
-                <CardTitle className="text-lg font-semibold text-[#111827]">Documentation</CardTitle>
+                <div className="flex items-center gap-3">
+                  <CardTitle className="text-lg font-semibold text-[#111827]">
+                    Documentation
+                  </CardTitle>
+
+                  <Badge variant="secondary">
+                    v{currentArtifactVersion} · {lastModifiedBy === 'user' ? 'Edited' : 'Generated'}
+                  </Badge>
+                </div>
               </CardHeader>
               <CardContent>
                 <Tabs defaultValue="current" className="h-full">
@@ -1361,20 +1456,85 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
 
                         {Object.entries(outputByType).map(([key, md]) => (
                           <TabsContent key={key} value={key} className="mt-4">
-                            <div className="flex justify-end">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => navigator.clipboard.writeText(md)}
-                              >
-                                <Copy className="mr-2 h-4 w-4" />
-                                Copy {key}
-                              </Button>
-                            </div>
+                            <div className="flex justify-end gap-2">
+                              {editingSheet !== key? (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setEditableOutput(md);
+                                      setEditingSheet(key);
+                                      setEditViewMode('edit');
+                                    }}
+                                  >
+                                    Edit
+                                  </Button>
 
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => navigator.clipboard.writeText(md)}
+                                  >
+                                    <Copy className="mr-2 h-4 w-4" />
+                                    Copy {key}
+                                  </Button>
+                                </>
+                              ) : (
+                                <>
+                              {/* Edit / Preview toggle */}
+                              <div className="flex items-center gap-2 mr-auto">
+                                <Button
+                                  size="sm"
+                                  variant={editViewMode === 'edit' ? 'default' : 'outline'}
+                                  onClick={() => setEditViewMode('edit')}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant={editViewMode === 'preview' ? 'default' : 'outline'}
+                                  onClick={() => setEditViewMode('preview')}
+                                >
+                                  Preview
+                                </Button>
+                              </div>
+
+                              <Button size="sm" onClick={handleSaveEdits}>
+                                Save
+                              </Button>
+
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  if (editingSheet) {
+                                    setEditableOutput(outputByType[editingSheet] || '');
+                                  }
+                                  setEditingSheet(null);
+                                  setEditViewMode('edit');
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </>
+                              )}
+                            </div>
                             <ScrollArea className="h-[calc(100vh-420px)]">
                               <div className="prose prose-sm max-w-none pr-4 dark:prose-invert">
-                                <ReactMarkdown>{md}</ReactMarkdown>
+                                {editingSheet === key ? (
+                                  editViewMode === 'edit' ? (
+                                    <Textarea
+                                      value={editableOutput}
+                                      onChange={(e) => setEditableOutput(e.target.value)}
+                                      className="min-h-[500px] w-full font-mono text-sm border-[#E5E7EB]"
+                                    />
+                                  ) : (
+                                    <ReactMarkdown>{editableOutput}</ReactMarkdown>
+                                  )
+                                ) : (
+                                  <ReactMarkdown>{md}</ReactMarkdown>
+                                )}
                               </div>
                             </ScrollArea>
                           </TabsContent>

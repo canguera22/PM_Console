@@ -15,6 +15,8 @@ import {
   Megaphone,
   ListOrdered,
   ArrowRight,
+  Brain,
+  MessageSquareText,
 } from 'lucide-react';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { supabaseFetch } from '@/lib/supabase';
@@ -33,7 +35,7 @@ export default function Dashboard() {
       title: 'Meeting Intelligence',
       description:
         'Process meeting transcripts into structured outputs with AI-powered analysis',
-      icon: FileText,
+      icon: MessageSquareText,
       path: '/meetings',
       hasPMAdvisor: false,
     },
@@ -142,7 +144,7 @@ export default function Dashboard() {
                 Project Workspace
               </h1>
               <p className="text-sm text-[#6B7280]">
-                Everything you do is scoped to the selected project
+                Create new documents using all available modules or reference recent work.
               </p>
             </div>
           </div>
