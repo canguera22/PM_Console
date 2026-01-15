@@ -16,8 +16,13 @@ import {
   LayoutDashboard
 } from 'lucide-react';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
-import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useSearchParams } from 'react-router-dom';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { extractTextFromFile } from '@/lib/documentExtraction';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
+
+
 
 
 interface ProjectArtifact {
@@ -37,6 +42,17 @@ interface ProjectArtifact {
   advisor_reviewed_at: string | null;
   status: string;
 }
+
+interface ProjectDocument {
+  id: string;
+  project_id: string;
+  name: string;
+  document_type: string | null;
+  storage_path: string;
+  created_at: string;
+  status: 'active' | 'archived';
+}
+
 
 const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
   meeting_intelligence: {
@@ -91,27 +107,131 @@ const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
   return artifact.artifact_name;
 };
 
+type OutputSection = {
+  id: string;
+  title: string;
+  content: string;
+};
+
+function splitAgentOutputIntoSections(output: string): OutputSection[] {
+  if (!output || !output.trim()) return [];
+
+  const rawSections = output
+    .split(/\n\s*---\s*\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return rawSections.map((content, idx) => {
+    const firstLine = content.split('\n')[0]?.trim() ?? '';
+    const h1Match = firstLine.match(/^#\s+(.*)$/);
+
+    const title = h1Match?.[1]?.trim() || `Section ${idx + 1}`;
+
+    return {
+      id: `${idx}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      title,
+      content,
+    };
+  });
+}
+
+/**
+ * Renders one output as either:
+ * - a single markdown document, OR
+ * - multiple sections split by "---" with tabs.
+ *
+ * For release_communications artifacts, we try to name tabs using
+ * artifact.input_data.selected_outputs (Customer/Internal/Support etc.)
+ */
+function ArtifactOutputViewer({
+  output,
+  selectedOutputs,
+}: {
+  output: string;
+  selectedOutputs?: any;
+}) {
+  const sections = splitAgentOutputIntoSections(output);
+
+  // Use the user's selected output labels when possible
+  const labels: string[] = Array.isArray(selectedOutputs)
+    ? selectedOutputs.filter((x) => typeof x === 'string')
+    : [];
+
+  const finalSections = sections.map((s, idx) => {
+    const labelFromSelections = labels[idx];
+    const useLabel =
+      labelFromSelections && labelFromSelections.trim().length > 0
+        ? labelFromSelections
+        : s.title;
+
+    return { ...s, title: useLabel };
+  });
+
+  // Single doc fallback
+  if (finalSections.length <= 1) {
+    return (
+      <div className="prose max-w-none mb-6">
+        <ReactMarkdown>{output}</ReactMarkdown>
+      </div>
+    );
+  }
+
+  // Multi-tab view
+  return (
+    <div className="mb-6">
+      <Tabs defaultValue={finalSections[0].id} className="w-full">
+        <div className="overflow-x-auto">
+          <TabsList className="inline-flex w-max gap-1">
+            {finalSections.map((sec) => (
+              <TabsTrigger key={sec.id} value={sec.id} className="whitespace-nowrap">
+                {sec.title}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
+
+        {finalSections.map((sec) => (
+          <TabsContent key={sec.id} value={sec.id} className="mt-4">
+            <div className="prose max-w-none">
+              <ReactMarkdown>{sec.content}</ReactMarkdown>
+            </div>
+          </TabsContent>
+        ))}
+      </Tabs>
+    </div>
+  );
+}
+
+
 export default function ProjectDashboard() {
   const { activeProject, isLoading: projectLoading } = useActiveProject();
   const [artifacts, setArtifacts] = useState<ProjectArtifact[]>([]);
+  const [documents, setDocuments] = useState<ProjectDocument[]>([]);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedArtifact, setSelectedArtifact] = useState<ProjectArtifact | null>(null);
   const [filterType, setFilterType] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const navigate = useNavigate();
+  const [openArtifacts, setOpenArtifacts] = useState<Record<string, boolean>>({});
+
 
 const artifactIdFromUrl = searchParams.get('artifact');
 
   useEffect(() => {
   if (!activeProject) return;
 
-  fetchArtifacts().then(() => {
-    if (artifactIdFromUrl) {
-      openArtifactById(artifactIdFromUrl);
-    }
-  });
+  fetchArtifacts();
+  fetchProjectDocuments();
+
+  if (artifactIdFromUrl) {
+    openArtifactById(artifactIdFromUrl);
+  }
 }, [activeProject, artifactIdFromUrl]);
+
 
 const closeArtifact = () => {
   setSelectedArtifact(null);
@@ -136,6 +256,20 @@ const closeArtifact = () => {
 
       console.log('✅ [Dashboard] Fetched artifacts', { count: data?.length });
       setArtifacts(data || []);
+
+      // Initialize all artifact sections as collapsed
+      setCollapsedSections((prev) => {
+      // Only initialize once
+      if (Object.keys(prev).length > 0) return prev;
+
+      const initial: Record<string, boolean> = {};
+      (data || []).forEach((a) => {
+        initial[a.artifact_type] = true;
+      });
+      return initial;
+    });
+
+
     } catch (error: any) {
       console.error('❌ [Dashboard Error]', error);
       toast.error('Failed to load artifacts', {
@@ -145,6 +279,97 @@ const closeArtifact = () => {
       setLoading(false);
     }
   };
+
+  const fetchProjectDocuments = async () => {
+  if (!activeProject) return;
+
+  setDocumentsLoading(true);
+
+  try {
+    const { data, error } = await supabase
+      .from('project_documents')
+      .select('*')
+      .eq('project_id', activeProject.id)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    setDocuments(data || []);
+  } catch (err: any) {
+    console.error('❌ Failed to load project documents', err);
+    toast.error('Failed to load project documents');
+  } finally {
+    setDocumentsLoading(false);
+  }
+};
+
+const handleDocumentUpload = async (file: File) => {
+  if (!activeProject) return;
+
+  setUploadingDoc(true);
+
+  try {
+    // 1️⃣ Create DB row first
+    const { data: doc, error: insertError } = await supabase
+      .from('project_documents')
+      .insert({
+        project_id: activeProject.id,
+        name: file.name,
+        document_type: file.type || null,
+        status: 'active',
+      })
+      .select()
+      .single();
+
+    if (insertError || !doc) throw insertError;
+
+    // 2️⃣ Upload to storage using canonical path
+    const storagePath = `projects/${activeProject.id}/${doc.id}/${file.name}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('project-documents')
+      .upload(storagePath, file);
+
+    if (uploadError) throw uploadError;
+
+    // 3️⃣ Extract text
+    const { text, metadata } = await extractTextFromFile(file);
+
+    // 4️⃣ Update DB with storage + extracted text
+    await supabase
+      .from('project_documents')
+      .update({
+        storage_path: storagePath,
+        extracted_text: text,
+        metadata,
+      })
+      .eq('id', doc.id);
+
+
+    //  Update UI
+    await fetchProjectDocuments();
+    toast.success('Document uploaded');
+  } catch (err: any) {
+    console.error('❌ Upload failed', err);
+    toast.error('Failed to upload document');
+  } finally {
+    setUploadingDoc(false);
+  }
+
+  let extractedText = null;
+let metadata = null;
+
+try {
+  const result = await extractTextFromFile(file);
+  extractedText = result.text;
+  metadata = result.metadata;
+} catch (err) {
+  console.warn('⚠️ Text extraction failed', err);
+}
+
+};
+
 
   const openArtifactById = async (artifactId: string) => {
   if (!activeProject) return;
@@ -161,6 +386,13 @@ const closeArtifact = () => {
     if (error || !data) return;
 
     setSelectedArtifact(data);
+
+    // Ensure the section is expanded
+    setCollapsedSections(prev => ({
+      ...prev,
+      [data.artifact_type]: false,
+    }));
+
   } catch (err) {
     console.warn('Artifact not accessible', err);
   }
@@ -227,23 +459,14 @@ const toggleSection = (type: string) => {
           <div className="flex items-start justify-between gap-8">
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <LayoutDashboard className="w-8 h-8 text-[#3B82F6]" />
-                <h1 className="text-[28px] font-bold text-[#111827]">Project Dashboard</h1>
+                <LayoutDashboard className="w-7 h-7 text-[#3B82F6]" />
+                <h1 className="text-[28px] font-bold text-[#111827]">
+                  Project Dashboard
+                </h1>
               </div>
               <p className="text-sm text-[#6B7280]">
                 All artifacts for {activeProject?.name || 'Unknown Project'}
               </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <ActiveProjectSelector />
-              <button
-                onClick={fetchArtifacts}
-                disabled={loading}
-                className="flex items-center gap-2 px-4 py-2 bg-[#3B82F6] text-white rounded-lg hover:bg-[#2563EB] disabled:bg-[#9CA3AF] transition-colors"
-              >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
             </div>
           </div>
         </div>
@@ -260,6 +483,83 @@ const toggleSection = (type: string) => {
           <StatCard label="PM Reviews" value={stats.pm_advisor} color="pink" />
         </div>
       </div>
+
+      {/* Project Context Documents */}
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="bg-white rounded-lg border border-[#E5E7EB] p-6 space-y-4">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-semibold text-[#111827]">
+                Project Context Documents
+              </h2>
+              <p className="text-xs text-[#6B7280] mt-1 max-w-xl">
+                Upload PRDs, specs, decks, or notes to give AI agents richer project context.
+              </p>
+            </div>
+
+            <label className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-[#3B82F6] rounded-md cursor-pointer hover:bg-[#2563EB] transition">
+              <FileText className="w-4 h-4" />
+              {uploadingDoc ? 'Uploading…' : 'Upload document'}
+              <input
+                type="file"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleDocumentUpload(file);
+                  e.currentTarget.value = '';
+                }}
+                disabled={uploadingDoc}
+              />
+            </label>
+          </div>
+
+          {documentsLoading ? (
+            <p className="text-sm text-[#6B7280]">Loading documents…</p>
+          ) : documents.length === 0 ? (
+            <p className="text-sm text-[#6B7280]">
+              No project documents uploaded yet.
+            </p>
+          ) : (
+            <ul className="divide-y divide-[#E5E7EB]">
+              {documents.map((doc) => (
+                <li key={doc.id} className="py-3 flex items-center justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <FileText className="w-5 h-5 text-[#3B82F6] mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-[#111827]">
+                        {doc.name}
+                      </p>
+                      <p className="text-xs text-[#6B7280]">
+                        Uploaded {new Date(doc.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={async () => {
+                      await supabase
+                        .from('project_documents')
+                        .update({ status: 'archived' })
+                        .eq('id', doc.id);
+
+                      setDocuments((prev) =>
+                        prev.filter((d) => d.id !== doc.id)
+                      );
+
+                      toast.success('Document removed');
+                    }}
+                    className="text-xs text-red-600 hover:text-red-800"
+                  >
+                    Remove
+                  </button>
+                </li>
+
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
 
       {/* Filters */}
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4">
@@ -342,14 +642,17 @@ const toggleSection = (type: string) => {
                 </button>
 
                 {/* Collapsible Content */}
-                {!collapsedSections[type] && (
+                {collapsedSections[type] === false && (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {typeArtifacts.map(artifact => (
                       <ArtifactCard
                         key={artifact.id}
                         artifact={artifact}
                         config={ARTIFACT_TYPE_CONFIG[artifact.artifact_type]}
-                        onClick={() => setSelectedArtifact(artifact)}
+                        onClick={() => {
+                          setSelectedArtifact(artifact);
+                          setSearchParams({ artifact: artifact.id });
+                        }}
                       />
                     ))}
                   </div>
@@ -464,9 +767,12 @@ function ArtifactDetailModal({ artifact, config, onClose }: {
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           {/* Output */}
-          <div className="prose max-w-none mb-6">
-            <ReactMarkdown>{artifact.output_data}</ReactMarkdown>
-          </div>
+            <ArtifactOutputViewer
+              output={artifact.output_data ?? ''}
+              selectedOutputs={artifact.input_data?.selected_outputs}
+            />
+
+
           
           {/* PM Advisor Feedback */}
           {artifact.advisor_feedback && (

@@ -17,7 +17,6 @@ import { ArrowLeft, Loader2, Copy, CheckCircle2, Upload, X, Download, Info, Plus
 import { calculateWSJF } from '@/lib/prioritization-agent';
 import { supabaseFetch } from '@/lib/supabase';
 import { ProjectArtifact } from '@/types/project-artifacts';
-import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import ReactMarkdown from 'react-markdown';
 import Papa from 'papaparse';
@@ -48,12 +47,17 @@ import type {
 
 import { Lightbulb } from 'lucide-react';
 import { callPMAdvisorAgent } from '@/lib/pm-advisor';
+import { useSearchParams } from 'react-router-dom';
+
 
 
 export default function Prioritization() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { activeProject } = useActiveProject();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const artifactIdFromUrl = searchParams.get('artifact');
+
 
   // Model Selection State
   const [selectedModel, setSelectedModel] = useState<PrioritizationModel>('WSJF');
@@ -180,6 +184,20 @@ useEffect(() => {
     setError(null);
   }
 }, [activeProject]);
+
+  useEffect(() => {
+    if (!artifactIdFromUrl || sessions.length === 0) return;
+
+    const matchingSession = sessions.find(
+      (s) => s.id === artifactIdFromUrl
+    );
+
+    if (matchingSession) {
+      loadSession(matchingSession);
+      setActiveTab('current');
+    }
+  }, [artifactIdFromUrl, sessions]);
+
 
 
   // CSV Upload Handlers
@@ -390,9 +408,10 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
   };
 
   // Calculate WSJF or show placeholder for other models
-  const handleCalculate = async () => {
-    // Clear previous error
-    setError(null);
+    const handleCalculate = async () => {
+      setSearchParams({});
+      setError(null);
+
     
     if (!csvContent) {
       const errorMsg = 'Please upload a CSV file';
@@ -634,21 +653,9 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                 </p>
               </div>
             </div>
-            <ActiveProjectSelector />
           </div>
         </div>
       </div>
-
-      {/* Active Project Indicator */}
-      {activeProject && (
-        <div className="border-b bg-muted/30">
-          <div className="container mx-auto px-4 py-2 sm:px-6 lg:px-8">
-            <p className="text-xs text-muted-foreground">
-              Project: <span className="font-medium">{activeProject.name}</span>
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Main Content - Three Column Layout */}
       <div className="container mx-auto grid gap-6 px-4 py-6 sm:px-6 lg:grid-cols-3 lg:px-8">
@@ -1501,7 +1508,8 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                           className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
                           onClick={() => {
                             loadSession(session);
-                            setActiveTab('current'); // 👈 CRITICAL
+                            setActiveTab('current');
+                            setSearchParams({ artifact: session.id });
                           }}
                         >
                           <CardContent className="p-4">

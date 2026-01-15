@@ -1,0 +1,98 @@
+# Project Context — Platform Reliability & Analytics Enhancements (v2.5.0)
+
+## Project Overview
+
+This project focuses on improving the reliability, security, and observability of the core platform while introducing incremental enhancements to user-facing analytics. The work represented here spans authentication flows, backend API correctness, dashboard usability, and internal tooling improvements, all targeted for the v2.5.0 release.
+
+The overarching goal is to reduce friction for end users during authentication, improve system resilience in edge cases, and provide clearer usage insights through enhanced analytics.
+
+---
+
+## Product Areas in Scope
+
+### Authentication & Access
+
+Improvements were made to strengthen authentication reliability and recovery paths, particularly for users encountering issues with MFA devices or SSO login flows. These changes aim to reduce support burden and unblock users more quickly when authentication problems arise.
+
+Key themes:
+
+* Account recovery and MFA reset flows
+* Stability of SSO login redirects
+* Reduction of authentication-related user lockouts
+
+---
+
+### Analytics & Dashboard Experience
+
+The project introduces new dashboard visualizations designed to provide clearer insights into usage patterns. These enhancements are intended for administrative and power users who rely on analytics to monitor adoption and performance.
+
+Key themes:
+
+* Expanded dashboard widgets
+* Improved visibility into usage trends
+* No changes to underlying analytics data models
+
+---
+
+### API Correctness & Error Handling
+
+Several fixes address backend edge cases where APIs previously returned incorrect or misleading errors. The goal is to ensure predictable behavior and clearer responses for both internal consumers and external integrations.
+
+Key themes:
+
+* Correct handling of deleted or invalid resources
+* More consistent API response semantics
+* Improved system robustness under edge conditions
+
+---
+
+### Platform & Tooling Maintenance
+
+Internal tooling upgrades were included to improve build performance and long-term maintainability. These changes are not user-visible but are foundational for future development velocity.
+
+Key themes:
+
+* Frontend build pipeline upgrades
+* No functional or visual regressions expected
+* Developer experience improvements
+
+---
+
+## Release Characteristics
+
+* **Release Type:** Mixed (User-facing improvements + internal maintenance)
+* **Risk Profile:** Low to Medium
+
+  * Most changes are additive or corrective
+  * Authentication-related changes warrant light monitoring post-release
+* **Target Version:** v2.5.0
+* **Primary Stakeholders:** Product, Engineering, Support, Operations
+
+---
+
+## Terminology & Conventions
+
+* **MFA:** Multi-Factor Authentication used during login
+* **SSO:** Single Sign-On via external identity providers
+* **Dashboard:** Refers to the main analytics and usage overview interface
+* **API:** Backend service endpoints consumed by UI and integrations
+
+---
+
+## Known Constraints & Assumptions
+
+* No schema changes are included in this release
+* No user action is required for existing users
+* Feature flags are not used for these changes
+* Support teams should be aware of updated authentication recovery flows
+
+---
+
+## Intended Use of This Document
+
+This document represents authoritative project context and should be used to:
+
+* Ground release communications
+* Ensure consistent terminology across artifacts
+* Inform assumptions made by automated documentation or analysis tools
+* Provide historical context for future related work

@@ -118,6 +118,38 @@ serve(async (req) => {
         400
       );
     }
+  
+  /* ---------------- Load Project Context Documents ---------------- */
+
+const { data: projectDocs, error: docsError } = await supabase
+  .from('project_documents')
+  .select('id, name, extracted_text, created_at')
+  .eq('project_id', project_id)
+  .eq('status', 'active')
+  .not('extracted_text', 'is', null)
+  .order('created_at', { ascending: false })
+  .limit(5);
+
+if (docsError) {
+  console.warn('[DOCS WARNING] Failed to load project documents', docsError);
+}
+
+const projectDocsContext =
+  Array.isArray(projectDocs) && projectDocs.length > 0
+    ? projectDocs
+        .filter(d => d.extracted_text && d.extracted_text.trim().length > 0)
+        .map(d => {
+          const text = d.extracted_text;
+          const snippet =
+            text.length > 3000
+              ? `${text.slice(0, 1500)}\n\n[... truncated ...]\n\n${text.slice(-1000)}`
+              : text;
+
+          return `### ${d.name}\n${snippet}`;
+        })
+        .join('\n\n')
+    : '';
+
 
     /* ---------------- Prompt Assembly ---------------- */
 
@@ -163,6 +195,19 @@ Only include what materially supports these outputs.
     ) {
       userPrompt += `\nFocus on the top ${top_n_items} items only.\n`;
     }
+
+if (projectDocsContext) {
+  userPrompt += `
+
+FOUNDATIONAL PROJECT CONTEXT (from uploaded documents):
+The following documents represent agreed context, constraints, or goals.
+Use them to inform prioritization insights, tradeoffs, and sequencing.
+Do NOT quote verbatim unless necessary.
+
+${projectDocsContext}
+`;
+}
+
 
     /* ---------------- OpenAI Call ---------------- */
 
@@ -219,6 +264,7 @@ Only include what materially supports these outputs.
           model: 'WSJF',
           tokens_used: completion.usage?.total_tokens,
           duration_ms: durationMs,
+          context_documents_used: projectDocsContext ? true : false,
         },
         status: 'active',
         advisor_feedback: null,

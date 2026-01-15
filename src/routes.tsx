@@ -1,15 +1,18 @@
 import { createBrowserRouter } from "react-router-dom";
+import AppLayout from "./Layouts/AppLayout";
+
 import Dashboard from "./pages/Dashboard";
+import ProjectDashboard from "./pages/ProjectDashboard";
 import MeetingIntelligence from "./pages/MeetingIntelligence";
 import ProductDocumentation from "./pages/ProductDocumentation";
 import ReleaseCommunications from "./pages/ReleaseCommunications";
 import Prioritization from "./pages/Prioritization";
-import ProjectDashboard from "./pages/ProjectDashboard";
 import NotFound from "./pages/NotFound";
 
 const routes = [
   {
     path: "/",
+    element: <AppLayout />, 
     children: [
       {
         index: true,

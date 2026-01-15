@@ -22,19 +22,38 @@ export interface DocumentationResult {
   session_id?: string;
 }
 
+type DocumentationEdgeResponse = {
+  output: string;
+  session_id?: string;
+};
+
 export async function generateDocumentation(
   input: DocumentationInput
 ): Promise<DocumentationResult> {
-  const { data, error } = await supabase.functions.invoke('product-documentation', {
-    body: input,
-  });
+  const { data, error } = await supabase.functions.invoke<DocumentationEdgeResponse>(
+    'product-documentation',
+    { body: input }
+  );
 
   if (error) {
     console.error('Error calling product-documentation edge function:', error);
-    throw new Error(error.message || 'Failed to generate documentation');
+
+    const details =
+      (error as any)?.context?.statusText ||
+      (error as any)?.details ||
+      (error as any)?.message ||
+      JSON.stringify(error);
+
+    throw new Error(details || 'Failed to generate documentation');
+  }
+
+  if (!data || typeof data.output !== 'string') {
+    console.error('Unexpected product-documentation response:', data);
+    throw new Error('Edge function returned an unexpected response (missing output).');
   }
 
   return {
     output: data.output,
+    session_id: data.session_id,
   };
 }

@@ -1,18 +1,19 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-// UUID validation helper
-function isValidUUID(uuid: string): boolean {
-  const uuidRegex =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  return uuidRegex.test(uuid);
-}
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
 const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+
+const corsHeaders = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
 
 /**
  * SYSTEM PROMPT (Refined)
@@ -21,7 +22,7 @@ const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 const SYSTEM_PROMPT = `You are a Senior Product Lead + Technical Program Manager. Your output must be IMPLEMENTATION-READY.
 
 Your job:
-- Produce build-ready PRDs with explicit workflows, data contracts, API boundaries, error states, and acceptance criteria.
+- Produce build-ready PRDs and/or other requested artifacts with explicit workflows, data contracts, API boundaries, error states, and acceptance criteria.
 - Do not write generic product fluff. Be specific, deterministic, and actionable.
 - If information is missing, DO NOT invent it. Instead:
   1) Add a "Missing Inputs" section listing what’s missing,
@@ -32,7 +33,7 @@ Important constraints:
 - Output must be in Markdown.
 - Use concrete structures: tables, checklists, numbered flows.
 - When you specify requirements, include acceptance criteria that a developer can test.
-- Always include: Core User Flows, Data Model/Contracts, Integration Points, Failure Modes & Error UX, and an MVP scope boundary.
+- Always include (when generating a PRD): Core User Flows, Data Model/Contracts, Integration Points, Failure Modes & Error UX, and an MVP scope boundary.
 
 Architecture context you must assume unless overridden:
 - Frontend: React (Vite) calling Supabase Edge Functions.
@@ -40,7 +41,37 @@ Architecture context you must assume unless overridden:
 - Central artifact storage: project_artifacts table, keyed by project_id (UUID).
 - Artifact output is saved to project_artifacts with input_data/output_data/metadata.
 
-Mandatory PRD Sections (always include these headings in this order):
+INPUT MODES (CRITICAL):
+The user may provide inputs via either:
+A) manual text fields, OR
+B) a Jira CSV upload represented as raw CSV text (csv_data) plus optional metadata like csv_filename and csv_row_count.
+
+When csv_data is present:
+- Treat the CSV as a SOURCE OF TRUTH for scope, tickets, and wording.
+- Do NOT assume fields that are not present in the CSV.
+- You may infer structure (e.g., Epic → Story → Task) ONLY if the CSV contains columns that support it (e.g., Issue Type, Parent, Epic Link, Summary).
+- If the CSV lacks key fields required to generate a strong PRD, add them under Missing Inputs / Open Questions.
+
+CSV HANDLING RULES:
+1) Start by identifying likely Jira columns (e.g., Issue Key, Issue Type, Summary, Description, Status, Priority, Epic Name, Epic Link, Parent, Labels, Components, Assignee).
+2) Produce a short "CSV Interpretation" section that includes:
+   - Which columns were detected / used
+   - How you interpreted hierarchy (Epics vs Stories)
+   - Any filtering you applied (e.g., excluding Done, excluding Sub-tasks) — if you filtered, state it explicitly
+3) Convert the CSV into structured requirements:
+   - If epics exist: summarize epics, then list stories underneath each epic
+   - If no hierarchy exists: group items by labels/components or by inferred themes from Summary/Description (clearly label as inferred)
+4) For each epic/story you include, provide:
+   - Brief intent (1–2 sentences)
+   - Explicit acceptance criteria (Given/When/Then or bullet list)
+   - Dependencies/assumptions (only if supported by CSV or clearly labeled as assumptions)
+5) Be conservative: if Description is missing, do not fabricate detailed behavior—use Open Questions.
+6) Treat epics as the source of truth
+7) Generate and break off stories per epic
+8) Do not describe CSV upload/import unless an epic is explicitly about that.
+
+
+Mandatory PRD Sections (always include these headings in this order) IF a PRD is requested:
 1) Overview
 2) Problem Statement
 3) Goals (measurable)
@@ -57,14 +88,172 @@ Mandatory PRD Sections (always include these headings in this order):
 14) Risks & Mitigations
 15) Open Questions
 
-When output types are requested (e.g., PRD, Epics, User Stories), generate ONLY those, but ensure PRD includes all mandatory sections above.`;
+Additional required sections WHEN csv_data is present and a PRD is requested:
+- Insert "CSV Interpretation" immediately after "Provided Inputs" (or after Overview if no Provided Inputs section exists).
+- Insert "CSV-Derived Scope" immediately before "Functional Requirements".
 
-/**
- * Helper: normalize blank strings
- */
-function isBlank(value: unknown): boolean {
-  return value === null || value === undefined || String(value).trim() === '';
+When output types are requested (e.g., PRD, Epics, User Stories), generate ONLY those.
+- If ONLY "User Stories" is requested: DO NOT output PRD sections, Missing Inputs, Reasonable Assumptions, or Open Questions. Just stories in the required format.
+- For "User Stories": Use Epic → Stories structure, and do not invent features not supported by inputs.
+
+Formatting rules:
+- Prefer tables for data contracts and mapping.
+- Make outputs copy/paste friendly for Confluence/Jira/Linear.
+`;
+
+type SourceMode = 'manual_only' | 'csv_only' | 'either';
+
+const OUTPUT_SPECS: Record<string, {
+  source: SourceMode;
+  purpose: string;
+  format: string;
+  rules: string[];
+}> = {
+  'prd': {
+    source: 'manual_only',
+    purpose: 'Implementation-ready PRD. DO NOT use CSV as source-of-truth for PRD content.',
+    format: `
+## Required Sections (in order)
+1) Overview
+2) Problem Statement
+3) Goals (measurable)
+4) Non-Goals / Out of Scope
+5) Personas & Primary Use Cases
+6) Core User Flows (step-by-step)
+7) Functional Requirements (grouped by capability, each with acceptance criteria)
+8) Non-Functional Requirements (latency, reliability, security posture, audit/logging)
+9) Data Model & Contracts (tables + required fields + enums)
+10) Integration Points (Edge Functions, payload contracts, expected responses)
+11) Error Handling & Observability (UI states + logging + how to debug)
+12) MVP Cutline
+13) Epics & User Stories (traceable to requirements)
+14) Risks & Mitigations
+15) Open Questions
+`.trim(),
+    rules: [
+      'Be specific, deterministic, testable.',
+      'Do not invent missing info. Use Missing Inputs + Assumptions + Open Questions.'
+    ]
+  },
+
+  'epics': {
+    source: 'manual_only',
+    purpose: 'High-quality epics derived from manual inputs only.',
+    format: `
+## Output Format
+- 4–10 epics
+- Each epic includes: Title, 1–2 sentence intent, In/Out, and 2–4 acceptance bullets
+`.trim(),
+    rules: [
+      'Do not use CSV as the primary source for epics.',
+      'No generic filler; make epics actionable.'
+    ]
+  },
+
+  'Epic Impact Statements': {
+    source: 'either',
+    purpose: 'Concise “why it matters” statements per epic, can be derived from epic text (CSV or manual).',
+    format: `
+## Output Format
+For each epic:
+- Epic: <title>
+- Impact Statement: 1–2 sentences (business + user impact)
+- KPI it should move: 1–2 bullets
+`.trim(),
+    rules: [
+      'Tie impact to actual epic text; don’t invent big new scope.'
+    ]
+  },
+
+  'user stories': {
+    source: 'either', // but best with epics/csv
+    purpose: 'INVEST user stories grouped under epics (prefer epic source-of-truth).',
+    format: `
+## Output Format (STRICT)
+For EACH epic:
+### Epic: <Epic Title> (Priority: <Priority> | Tags: <Tags>)
+Short intent: 1 sentence.
+
+#### Story 1 — <Short story title>
+As a <persona>, I want <capability>, so that <benefit>.
+**Acceptance Criteria**
+- Given ... When ... Then ...
+- Given ... When ... Then ...
+`.trim(),
+    rules: [
+      '2–4 stories for High priority epics; 1–3 for Medium; 1–2 for Low.',
+      'AC must be testable and specific (no “works”, “easy”, “fast”).',
+      'Do not mention CSV upload/import unless an epic explicitly says so.'
+    ]
+  },
+
+  'acceptance criteria': {
+    source: 'either',
+    purpose: 'AC packs per epic/story, can be derived from PRD inputs or epic/story CSV.',
+    format: `
+## Output Format
+For each epic/story:
+- Item: <name>
+- Acceptance Criteria (Given/When/Then): 5–10 lines
+- Negative cases: 2–4 lines
+`.trim(),
+    rules: [
+      'Prefer explicit states, validations, errors, and edge cases.',
+    ]
+  },
+
+  'out of scope': {
+    source: 'either',
+    purpose: 'Clear non-goals based on PRD inputs or epic scope.',
+    format: `
+## Output Format
+- 8–15 bullets
+- Grouped by theme (e.g., Permissions, Integrations, UX polish)
+- Each bullet includes: “Not in v1 because …”
+`.trim(),
+    rules: ['No invented features—only exclude what’s implied by scope.']
+  },
+
+  'risks / mitigations': {
+    source: 'either',
+    purpose: 'Risks driven by the actual scope (PRD or epics/stories).',
+    format: `
+## Output Format
+| Risk | Likelihood | Impact | Early Signal | Mitigation | Owner |
+|------|------------|--------|--------------|------------|-------|
+`.trim(),
+    rules: ['Include at least 8 risks; make signals + mitigations concrete.']
+  },
+
+  'dependency mapping': {
+    source: 'either',
+    purpose: 'Dependencies across teams/systems based on PRD or epic/story set.',
+    format: `
+## Output Format
+| Item | Dependency Type | Depends On | Why | Owner | Needed By | Risk if Late |
+|------|------------------|-----------|-----|-------|----------|--------------|
+`.trim(),
+    rules: ['Must include internal + external dependencies where relevant.']
+  },
+
+  'success metrics / kpi drafts': {
+    source: 'either',
+    purpose: 'Metrics tied to goals/epics.',
+    format: `
+## Output Format
+| Metric | Definition | Source | Target | Measurement Cadence | Notes |
+|--------|------------|--------|--------|----------------------|------|
+`.trim(),
+    rules: ['No vanity metrics unless explicitly relevant.']
+  },
+};
+
+function normalizeOutputName(o: string): string {
+  return o.trim().toLowerCase();
 }
+
+
+
 
 /**
  * Helper: build missing inputs list (for better PRDs even with partial inputs)
@@ -74,15 +263,14 @@ function buildMissingInputs(payload: Record<string, unknown>): string[] {
 
   // These are typically "required" in your UI, but we handle missing gracefully
   const requiredish = [
-    { key: 'problem_statement', label: 'Problem Statement' },
-    { key: 'target_user_persona', label: 'Target User Persona' },
-    { key: 'business_goals', label: 'Business Goals' },
-    { key: 'assumptions_constraints', label: 'Assumptions & Constraints' },
-    { key: 'functional_requirements', label: 'Functional Requirements' },
-    { key: 'dependencies', label: 'Dependencies' },
-    { key: 'selected_outputs', label: 'Selected Output Types' },
-    { key: 'project_name', label: 'Project Name (optional but helpful)' },
-  ];
+  { key: 'problem_statement', label: 'Problem Statement (required for PRD)' },
+  { key: 'target_user_persona', label: 'Target User Persona' },
+  { key: 'business_goals', label: 'Business Goals' },
+  { key: 'assumptions_constraints', label: 'Assumptions & Constraints' },
+  { key: 'functional_requirements', label: 'Functional Requirements' },
+  { key: 'dependencies', label: 'Dependencies' },
+];
+
 
   for (const item of requiredish) {
     const value = payload[item.key];
@@ -96,6 +284,59 @@ function buildMissingInputs(payload: Record<string, unknown>): string[] {
 
   return missing;
 }
+
+// -----------------------------
+// Canonical "epics" extraction (SOURCE OF TRUTH)
+// Prefer body.epics if provided; else derive from CSV rows
+// -----------------------------
+const normalize = (v: any) => (v === null || v === undefined ? '' : String(v)).trim();
+
+const issueTypeKey = (row: any) =>
+  normalize(row['Issue Type'] ?? row['IssueType'] ?? row['Type'] ?? row['type']);
+
+const isEpicRow = (row: any) => /epic/i.test(issueTypeKey(row));
+
+function isBlank(value: unknown): boolean {
+  return (
+    value === null ||
+    value === undefined ||
+    (typeof value === 'string' && value.trim().length === 0)
+  );
+}
+
+function isValidUUID(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+// =====================================================
+// NEW: Fetch project context documents (read-only)
+// =====================================================
+let projectContextText = '';
+
+try {
+  const { data: docs, error: docsError } = await supabase
+    .from('project_documents')
+    .select('name, extracted_text')
+    .eq('project_id', project_id)
+    .eq('status', 'active')
+    .not('extracted_text', 'is', null);
+
+  if (docsError) {
+    console.warn('⚠️ Failed to fetch project documents', docsError);
+  } else if (docs && docs.length > 0) {
+    projectContextText =
+      `\n\nPROJECT CONTEXT DOCUMENTS (REFERENCE ONLY — DO NOT INVENT SCOPE):\n` +
+      docs
+        .map(
+          (d) =>
+            `\n---\nDocument: ${d.name}\n${d.extracted_text}`
+        )
+        .join('\n');
+  }
+} catch (err) {
+  console.warn('⚠️ Project document fetch error', err);
+}
+
 
 serve(async (req) => {
   const startTime = Date.now();
@@ -116,6 +357,62 @@ serve(async (req) => {
   try {
     const body = await req.json();
 
+    // -----------------------------
+// CSV detection (supports multiple frontend keys)
+// -----------------------------
+const jiraIssues =
+  body?.jira_issues_normalized ??
+  body?.jira_issues ??
+  body?.parsedCsv ??
+  body?.parsed_csv ??
+  body?.csv_rows ??
+  body?.jiraIssues ??
+  null;
+
+const jiraCsvText =
+  body?.jira_csv_text ??
+  body?.csv_data ??
+  body?.csvText ??
+  body?.csv_text ??
+  null;
+
+const hasCsvIssues = Array.isArray(jiraIssues) && jiraIssues.length > 0;
+const hasCsvText = typeof jiraCsvText === 'string' && jiraCsvText.trim().length > 0;
+const hasCsvInput = hasCsvIssues || hasCsvText;
+
+  const epics = Array.isArray(body?.epics) && body.epics.length > 0
+    ? body.epics
+    : hasCsvIssues
+    ? (jiraIssues as any[])
+        .filter(isEpicRow)
+        .map((r: any) => ({
+          title: normalize(r['Epic Name'] ?? r['Epic Summary'] ?? r['Summary'] ?? r['Epic'] ?? ''),
+          summary: normalize(r['Description'] ?? r['Epic Description'] ?? ''),
+          priority: normalize(r['Priority'] ?? ''),
+          tags: normalize(r['Labels'] ?? r['Components'] ?? ''),
+          // optional: keep key for traceability
+          key: normalize(r['Issue key'] ?? r['Issue Key'] ?? r['Key'] ?? ''),
+        }))
+        .filter((e: any) => e.title.length > 0)
+    : [];
+
+
+const hasEpics = Array.isArray(epics) && epics.length > 0;
+
+    // 🔁 Normalize CSV payload from frontend
+    if (!body.jira_issues && Array.isArray(body.jira_issues_normalized)) {
+      body.jira_issues = body.jira_issues_normalized;
+    }
+
+    if (!body.epics && body.epic_story_model?.epics) {
+      body.epics = body.epic_story_model.epics;
+    }
+
+
+console.log('🧪 RAW BODY KEYS', Object.keys(body || {}));
+console.log('🧪 BODY SAMPLE', JSON.stringify(body, null, 2).slice(0, 2000));
+
+
     const {
       problem_statement,
       target_user_persona,
@@ -133,8 +430,83 @@ serve(async (req) => {
       selected_outputs,
       project_id,
       project_name,
-      artifact_name,
+      input_name,
     } = body;
+
+    const artifact_name =
+      body?.input_name ??
+      body?.artifact_name ??
+      null;
+
+const resolvedInputName =
+  input_name ??
+  artifact_name ??
+  (hasCsvInput ? 'CSV Upload' : 'Manual Input');
+
+if (isBlank(resolvedInputName)) {
+  return new Response(
+    JSON.stringify({
+      error: 'Missing input_name',
+      details: 'Unable to infer input_name from request.',
+    }),
+    { status: 400, headers: corsHeaders }
+  );
+}
+
+
+
+
+const requestedOutputs = Array.isArray(selected_outputs)
+  ? selected_outputs.map(o => normalizeOutputName(o))
+  : [];
+
+const wantsPRD = requestedOutputs.includes('prd');
+const wantsUserStories = requestedOutputs.includes('user stories');
+
+
+
+    
+    // ❌ Disallow PRD generation from CSV input
+    if (hasCsvInput && wantsPRD) {
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid output selection',
+          details:
+            'PRD generation requires manual inputs. CSV uploads are intended for User Stories, Acceptance Criteria, Dependencies, Risks, and Scope.',
+        }),
+        {
+          status: 400,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+          },
+        }
+      );
+    }
+
+
+// matches "PRD"
+    const wantsUserStories = requestedOutputs.includes('user stories');
+
+    // 🚨 CSV-only short-circuit (NO manual validation allowed)
+      if (hasCsvInput && wantsUserStories && !wantsPRD) {
+        console.log('✅ CSV-only User Stories mode — skipping manual input validation');
+      }
+
+        // 🚫 PRD requires manual input
+    
+    if (wantsPRD && !hasCsvInput && isBlank(problem_statement)) {
+  return new Response(
+    JSON.stringify({
+      error: 'Missing problem statement',
+      details: 'PRD generation requires a problem statement when no CSV or epics are provided.',
+    }),
+    { status: 400, headers: corsHeaders }
+  );
+}
+
+
+
 
     console.log('📋 [Payload]', {
       selected_outputs,
@@ -146,24 +518,26 @@ serve(async (req) => {
       problem_statement_length: problem_statement?.length || 0,
     });
 
-    // Validation (keep strict on project_id + OpenAI key)
-    if (!problem_statement) {
-      console.warn('⚠️ [Validation Error] Missing problem_statement');
-      return new Response(
-        JSON.stringify({
-          error: 'Missing problem_statement',
-          details:
-            'Please provide a problem statement to generate documentation',
-        }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          },
-        }
-      );
-    }
+
+
+
+
+console.log('🧱 [Epics Canonical]', {
+  hasEpics,
+  epicCount: hasEpics ? epics.length : 0,
+  firstEpic: hasEpics ? epics[0] : null,
+});
+
+
+console.log('📎 [CSV Detect]', {
+  body_keys: Object.keys(body || {}),
+  hasCsvIssues,
+  csvRowCount: hasCsvIssues ? jiraIssues.length : 0,
+  firstRowKeys: hasCsvIssues ? Object.keys(jiraIssues[0] || {}) : [],
+  hasCsvText,
+  csvTextLength: hasCsvText ? jiraCsvText.length : 0,
+});
+
 
     // CRITICAL: Validate project_id is a valid UUID
     if (!project_id || !isValidUUID(project_id)) {
@@ -203,87 +577,98 @@ serve(async (req) => {
     }
 
     // Build Missing Inputs list (prevents hallucination + increases “build-ready” quality)
-    const missingInputs = buildMissingInputs(body);
+    // Only enforce Missing Inputs / Assumptions sections when a PRD is requested.
+    // For CSV → User Stories only, do not force Missing Inputs (it drags the model into PRD territory).
+    const missingInputs =
+      wantsPRD && !hasCsvInput
+        ? buildMissingInputs(body)
+        : [];
+
+
+
+
 
     // Build user message (refined: includes contracts, workflow, and required sections)
-    let userMessage = `You are generating IMPLEMENTATION-READY product documentation.\n\n`;
+    let userMessage = ``;
 
-    // Output selection
-    if (selected_outputs && Array.isArray(selected_outputs) && selected_outputs.length > 0) {
-      userMessage += `Requested outputs:\n${selected_outputs
-        .map((o: string) => `- ${o}`)
-        .join('\n')}\n\n`;
-    } else {
-      userMessage += `Requested outputs:\n- PRD (Product Requirements Document)\n\n`;
-    }
 
-    // Project context (critical for project-level architecture specs)
-    userMessage += `Project Context:\n- project_id (UUID): ${project_id}\n- project_name: ${project_name || '(not provided)'}\n`;
-    userMessage += `\nArchitecture Notes (must reflect in PRD):\n`;
-    userMessage += `- Central artifact store: project_artifacts table keyed by project_id (UUID)\n`;
-    userMessage += `- Artifacts saved with: project_id, project_name, artifact_type, artifact_name, input_data(JSON), output_data(TEXT), metadata(JSON), status\n`;
-    userMessage += `- Edge Function will store output in project_artifacts (already implemented)\n\n`;
+const outputsToGenerate =
+  requestedOutputs.length > 0
+    ? requestedOutputs
+    : hasCsvInput
+      ? ['user stories']
+      : ['prd'];
 
-    // Missing inputs section directive
-    if (missingInputs.length > 0) {
-      userMessage += `IMPORTANT: The following inputs are missing or incomplete:\n${missingInputs
-        .map((m) => `- ${m}`)
-        .join('\n')}\n\n`;
-      userMessage += `You MUST include a "Missing Inputs" section and a "Reasonable Assumptions" section in the PRD.\n`;
-      userMessage += `Do NOT invent specifics. Keep assumptions clearly labeled.\n\n`;
-    }
 
-    // Provided inputs
-    userMessage += `Provided Inputs:\n\n`;
-    userMessage += `**Problem Statement:**\n${problem_statement}\n\n`;
+userMessage += `Requested outputs:\n${outputsToGenerate.map((o) => `- ${o}`).join('\n')}\n\n`;
+userMessage += `Project Context:\n- project_id (UUID): ${project_id}\n- project_name: ${project_name || '(not provided)'}\n\n`;
+// Append project context documents (if any)
+if (projectContextText) {
+  userMessage += projectContextText + '\n\n';
+}
 
-    if (!isBlank(target_user_persona)) {
-      userMessage += `**Target User Persona:**\n${target_user_persona}\n\n`;
-    }
-    if (!isBlank(business_goals)) {
-      userMessage += `**Business Goals:**\n${business_goals}\n\n`;
-    }
-    if (!isBlank(assumptions_constraints)) {
-      userMessage += `**Assumptions & Constraints:**\n${assumptions_constraints}\n\n`;
-    }
-    if (!isBlank(functional_requirements)) {
-      userMessage += `**Functional Requirements:**\n${functional_requirements}\n\n`;
-    }
-    if (!isBlank(dependencies)) {
-      userMessage += `**Dependencies:**\n${dependencies}\n\n`;
-    }
+// Source of truth blocks
+if (hasEpics) {
+  userMessage += `SOURCE OF TRUTH (Epics):\nUse ONLY the epics below. Do not invent new epics.\n\n`;
+  userMessage += `\`\`\`json\n${JSON.stringify(epics, null, 2)}\n\`\`\`\n\n`;
+} else if (hasCsvIssues) {
+  userMessage += `CSV Upload Detected:\n- Row count: ${jiraIssues.length}\n- Detected columns: ${Object.keys(jiraIssues[0] || {}).join(', ')}\n\n`;
+  userMessage += `CSV Rows (first 25):\n\`\`\`json\n${JSON.stringify(jiraIssues.slice(0, 25), null, 2)}\n\`\`\`\n\n`;
+} else if (hasCsvText) {
+  userMessage += `CSV Upload Detected (raw text):\n- Text length: ${jiraCsvText.length}\n\n`;
+  userMessage += `\`\`\`csv\n${jiraCsvText.slice(0, 8000)}\n\`\`\`\n\n`;
+}
 
-    if (!isBlank(non_functional_requirements)) {
-      userMessage += `**Non-Functional Requirements:**\n${non_functional_requirements}\n\n`;
-    }
-    if (!isBlank(user_pain_points)) {
-      userMessage += `**User Pain Points / Jobs to Be Done:**\n${user_pain_points}\n\n`;
-    }
-    if (!isBlank(competitive_context)) {
-      userMessage += `**Competitive / Market Context:**\n${competitive_context}\n\n`;
-    }
-    if (!isBlank(technical_constraints)) {
-      userMessage += `**Technical Constraints:**\n${technical_constraints}\n\n`;
-    }
-    if (!isBlank(success_metrics)) {
-      userMessage += `**Success Metrics / KPIs:**\n${success_metrics}\n\n`;
-    }
-    if (!isBlank(target_timeline)) {
-      userMessage += `**Target Release Timeline:**\n${target_timeline}\n\n`;
-    }
-    if (!isBlank(epic_impact)) {
-      userMessage += `**Epic Impact Statement:**\n${epic_impact}\n\n`;
-    }
+// Manual inputs (only if present)
+userMessage += `Manual Inputs (only if present):\n`;
+if (!isBlank(problem_statement)) userMessage += `- Problem Statement: ${problem_statement}\n`;
+if (!isBlank(target_user_persona)) userMessage += `- Target User Persona: ${target_user_persona}\n`;
+if (!isBlank(business_goals)) userMessage += `- Business Goals: ${business_goals}\n`;
+if (!isBlank(functional_requirements)) userMessage += `- Functional Requirements: ${functional_requirements}\n`;
+userMessage += `\n`;
 
-    // Hard requirements for “build-ready”
-    userMessage += `\nHard Requirements for Output Quality:\n`;
-    userMessage += `1) PRD MUST include: explicit step-by-step user flows (project selection → generate artifact → persist → dashboard).\n`;
-    userMessage += `2) PRD MUST include: a Data Model/Contracts section with a table defining at minimum project_artifacts fields and enums.\n`;
-    userMessage += `3) PRD MUST include: Integration Points: edge function payload + expected response, including error responses.\n`;
-    userMessage += `4) PRD MUST include: Error Handling & Observability: UI states, logs, and how to debug failed edge calls.\n`;
-    userMessage += `5) Epics + Stories MUST be directly traceable to PRD requirements.\n`;
-    userMessage += `6) Keep it realistic for an MVP: include an MVP cutline.\n\n`;
-    userMessage += `Generate in Markdown optimized for Confluence/Jira/Linear copy/paste.\n`;
+// Output-by-output instructions
+userMessage += `IMPORTANT OUTPUT RULES:\n`;
+userMessage += `- Return Markdown ONLY.\n`;
+userMessage += `- You MUST return each output as its own section, preceded by a marker line exactly like:\n`;
+userMessage += `  <!-- OUTPUT: <Output Name> -->\n`;
+userMessage += `- Do NOT add any content before the first OUTPUT marker.\n`;
+userMessage += `- Do NOT merge outputs.\n\n`;
+
+for (const out of outputsToGenerate) {
+  const spec = OUTPUT_SPECS[out] ?? null;
+
+  userMessage += `<!-- OUTPUT: ${out} -->\n`;
+  userMessage += `# ${out}\n`;
+
+  if (!spec) {
+    userMessage += `Generate a high-quality ${out} artifact based ONLY on provided inputs. Keep it specific and testable.\n\n`;
+    continue;
+  }
+
+  userMessage += `Purpose: ${spec.purpose}\n\n`;
+
+  // Enforce source rules
+  if (spec.source === 'manual_only') {
+    userMessage += `SOURCE RULE: Use MANUAL INPUTS ONLY. Ignore CSV/Epics blocks unless manual text explicitly includes them.\n\n`;
+  } else if (spec.source === 'csv_only') {
+    userMessage += `SOURCE RULE: Use CSV/Epics ONLY. Do not invent missing manual context.\n\n`;
+  } else {
+    userMessage += `SOURCE RULE: Use the best available inputs (Epics preferred if present; else CSV rows; else manual inputs).\n\n`;
+  }
+
+  // PRD-only missing inputs behavior
+  if (out === 'prd' && missingInputs.length > 0) {
+    userMessage += `Missing Inputs (must include these sections in PRD):\n${missingInputs.map((m) => `- ${m}`).join('\n')}\n\n`;
+    userMessage += `You MUST include: Missing Inputs, Reasonable Assumptions, Open Questions.\n\n`;
+  }
+
+  userMessage += `${spec.format}\n\n`;
+  userMessage += `Rules:\n${spec.rules.map((r) => `- ${r}`).join('\n')}\n\n`;
+}
+
+userMessage += `Quality bar: 8/10+ (traceability to inputs, crisp structure, testable AC, no invented scope).\n`;
+userMessage += `\nOutput in Markdown optimized for Jira/Confluence copy/paste.\n`;
 
     console.log('🤖 [OpenAI] Calling GPT-4o...');
     console.log('📊 [OpenAI] Message length:', userMessage.length);
@@ -302,8 +687,8 @@ serve(async (req) => {
           { role: 'user', content: userMessage },
         ],
         // Lower temperature = less fluff, more spec-quality
-        temperature: 0.25,
-        max_tokens: 5000,
+        temperature: 0.2,
+        max_tokens: 4500,
       }),
     });
 
@@ -338,7 +723,9 @@ serve(async (req) => {
         project_id: project_id,
         project_name: project_name || 'Unknown Project',
         artifact_type: 'product_documentation',
-        artifact_name: artifact_name || `PRD - ${new Date().toLocaleDateString()}`,
+        artifact_name:
+          artifact_name ||
+          `${wantsUserStories && !wantsPRD ? 'User Stories' : 'PRD'} - ${new Date().toLocaleDateString()}`,
         input_data: {
           problem_statement,
           target_user_persona,
@@ -355,6 +742,8 @@ serve(async (req) => {
           epic_impact,
           selected_outputs,
           missing_inputs: missingInputs,
+          jira_issues: hasCsvIssues ? jiraIssues : undefined,
+          csv_data: hasCsvText ? jiraCsvText : undefined,
         },
         output_data: output,
         metadata: {
@@ -363,7 +752,7 @@ serve(async (req) => {
           tokens_used: data.usage?.total_tokens,
           duration_ms: duration,
           model: 'gpt-4o',
-          temperature: 0.25,
+          temperature: 0.2,
         },
         status: 'active',
       })

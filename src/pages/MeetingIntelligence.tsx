@@ -15,16 +15,20 @@ import { analyzeMeeting } from '@/lib/agent';
 import { supabaseFetch } from '@/lib/supabase';
 import { MeetingSession, MEETING_TYPES, ProjectArtifactRow } from '@/types/meeting';
 import { SampleTranscriptDialog } from '@/components/SampleTranscriptDialog';
-import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import ReactMarkdown from 'react-markdown';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
+import { useSearchParams } from 'react-router-dom';
+
 
 export default function MeetingIntelligence() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { activeProject } = useActiveProject();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const artifactIdFromUrl = searchParams.get('artifact');
+
 
   // Form state
   const [transcript, setTranscript] = useState('');
@@ -52,6 +56,19 @@ export default function MeetingIntelligence() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject]);
+
+  useEffect(() => {
+  if (!artifactIdFromUrl || sessions.length === 0) return;
+
+  const matchingSession = sessions.find(
+    (s) => s.id === artifactIdFromUrl
+  );
+
+  if (matchingSession) {
+    loadSession(matchingSession);
+  }
+}, [artifactIdFromUrl, sessions]);
+
 
   const artifactToMeetingSession = (a: ProjectArtifactRow): MeetingSession => {
     const input = a.input_data ?? {};
@@ -112,6 +129,7 @@ export default function MeetingIntelligence() {
   };
 
   const handleAnalyze = async () => {
+    setSearchParams({});
     setError(null);
 
     if (!transcript.trim()) {
@@ -270,21 +288,9 @@ export default function MeetingIntelligence() {
                 <p className="text-sm text-[#6B7280]">AI-powered meeting analysis</p>
               </div>
             </div>
-            <ActiveProjectSelector />
           </div>
         </div>
       </div>
-
-      {/* Active Project Indicator */}
-      {activeProject && (
-        <div className="border-b border-[#E5E7EB] bg-[#F9FAFB]">
-          <div className="container mx-auto px-4 py-2 sm:px-6 lg:px-8">
-            <p className="text-xs text-[#6B7280]">
-              Project: <span className="font-medium text-[#111827]">{activeProject.name}</span>
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Main Content */}
       <div className="container mx-auto grid gap-6 px-4 py-8 sm:px-6 lg:grid-cols-2 lg:px-8">
@@ -457,7 +463,10 @@ export default function MeetingIntelligence() {
                           <Card
                             key={session.id}
                             className="cursor-pointer transition-all duration-200 hover:border-[#3B82F6] hover:shadow-md"
-                            onClick={() => loadSession(session)}
+                            onClick={() => {
+                              loadSession(session);
+                              setSearchParams({ artifact: session.id });
+                            }}
                           >
                             <CardContent className="p-4">
                               <div className="space-y-2">
