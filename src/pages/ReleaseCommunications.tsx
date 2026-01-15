@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import Papa from 'papaparse';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,7 +31,6 @@ import ReactMarkdown from 'react-markdown';
 import { generateReleaseDocumentation } from '@/lib/release-agent';
 import { supabaseFetch } from '@/lib/supabase';
 import { OUTPUT_TYPES, OutputType, ParsedCSV } from '@/types/release';
-import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
@@ -103,6 +103,9 @@ export default function ReleaseCommunications() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { activeProject } = useActiveProject();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const artifactIdFromUrl = searchParams.get('artifact');
+
 
   // File upload state
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -169,6 +172,15 @@ export default function ReleaseCommunications() {
         });
       }, [currentOutput]);
 
+      useEffect(() => {
+        if (!artifactIdFromUrl || sessions.length === 0) return;
+
+        const match = sessions.find((s) => s.id === artifactIdFromUrl);
+
+        if (match) {
+          loadSession(match);
+        }
+      }, [artifactIdFromUrl, sessions]);
 
   const loadSessions = async () => {
   if (!activeProject) return;
@@ -185,10 +197,11 @@ export default function ReleaseCommunications() {
 
     setSessions(data);
 
-    // ✅ AUTO-LOAD MOST RECENT SESSION (includes advisor feedback)
-    if (data.length > 0) {
+    // Auto-load most recent ONLY if no deep-linked artifact
+    if (!artifactIdFromUrl && data.length > 0) {
       loadSession(data[0]);
     }
+
 
   } catch (err) {
     console.error('Error loading sessions:', err);
@@ -319,8 +332,10 @@ export default function ReleaseCommunications() {
   };
 
   const handleGenerate = async () => {
+    setSearchParams({});
     setError(null);
     setAdvisorError(null);
+
 
     if (!activeProject) {
       const msg = 'No active project selected';
@@ -577,21 +592,9 @@ await loadSessions();
                 <p className="text-sm text-muted-foreground">Generate release documentation from Jira CSV exports</p>
               </div>
             </div>
-            <ActiveProjectSelector />
           </div>
         </div>
       </div>
-
-      {/* Active Project Indicator */}
-      {activeProject && (
-        <div className="border-b bg-muted/30">
-          <div className="container mx-auto px-4 py-2 sm:px-6 lg:px-8">
-            <p className="text-xs text-muted-foreground">
-              Project: <span className="font-medium">{activeProject.name}</span>
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Main Content */}
       <div className="container mx-auto grid gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[2fr_1.5fr_2fr] lg:px-8">
@@ -930,7 +933,10 @@ await loadSessions();
                         <Card
                           key={s.id}
                           className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
-                          onClick={() => loadSession(s)}
+                          onClick={() => {
+                            loadSession(s);
+                            setSearchParams({ artifact: s.id });
+                          }}
                         >
                           <CardContent className="p-4">
                             <div className="space-y-2">

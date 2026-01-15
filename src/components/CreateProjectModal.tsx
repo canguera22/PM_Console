@@ -41,6 +41,13 @@ export function CreateProjectModal({
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState<'active' | 'archived'>('active');
   const [nameError, setNameError] = useState('');
+  const [contextFiles, setContextFiles] = useState<File[]>([]);
+
+const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  if (!e.target.files) return;
+  setContextFiles(Array.from(e.target.files));
+};
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,6 +77,29 @@ export function CreateProjectModal({
 
       console.log('🟢 [CreateProjectModal] Project created:', project);
 
+      // Upload project context documents (non-blocking)
+      if (contextFiles.length > 0) {
+        try {
+          const { uploadProjectDocument } = await import('@/lib/projectDocuments');
+
+          for (const file of contextFiles) {
+            await uploadProjectDocument(project.id, file);
+          }
+        } catch (err) {
+          console.warn(
+            '⚠️ Project created, but some context files failed to upload',
+            err
+          );
+
+          toast({
+            title: 'Project created with warnings',
+            description:
+              'The project was created, but one or more context files failed to upload.',
+          });
+        }
+      }
+
+
       toast({
         title: 'Project created',
         description: `"${project.name}" is now your active project`,
@@ -87,6 +117,7 @@ export function CreateProjectModal({
       setStatus('active');
       setNameError('');
       onOpenChange(false);
+      setContextFiles([]);
     } catch (error: any) {
       console.error('❌ [CreateProjectModal] createProject failed', error);
 
@@ -156,6 +187,31 @@ export function CreateProjectModal({
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-[13px] font-medium text-[#6B7280]">
+                Project Context (Optional)
+              </Label>
+
+              <Input
+                type="file"
+                multiple
+                accept=".pdf,.txt,.doc,.docx"
+                onChange={handleFileChange}
+              />
+
+              {contextFiles.length > 0 && (
+                <ul className="text-xs text-[#6B7280] space-y-1">
+                  {contextFiles.map((file, i) => (
+                    <li key={i}>• {file.name}</li>
+                  ))}
+                </ul>
+              )}
+
+              <p className="text-xs text-[#9CA3AF]">
+                Upload workflows, specs, or other documents to provide project-wide context.
+              </p>
             </div>
 
             <div className="space-y-2">

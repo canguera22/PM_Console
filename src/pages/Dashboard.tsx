@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { getArtifactRoute } from '@/lib/artifactRouting';
 import { useNavigate } from 'react-router-dom';
 import {
   Card,
@@ -15,7 +16,6 @@ import {
   ListOrdered,
   ArrowRight,
 } from 'lucide-react';
-import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { supabaseFetch } from '@/lib/supabase';
 import { ProjectArtifact } from '@/types/project-artifacts';
@@ -145,7 +145,6 @@ export default function Dashboard() {
                 Everything you do is scoped to the selected project
               </p>
             </div>
-            <ActiveProjectSelector />
           </div>
         </div>
       </div>
@@ -188,42 +187,46 @@ export default function Dashboard() {
               </div>
             )}
 
-            {recentArtifacts.map((artifact) => (
-              <div
-                key={artifact.id}
-                onClick={() =>
-                  navigate(`/dashboard?artifact=${artifact.id}`)
-                }
-                className="flex items-center justify-between rounded-md border p-3 cursor-pointer hover:bg-muted/50 transition"
-              >
-                <div className="space-y-1">
-                  {/* PRIMARY: input / initiative name */}
-                  <p className="text-sm font-medium">
-                    {getArtifactDisplayName(artifact)}
-                  </p>
+            {recentArtifacts.map((artifact) => {
+              const route = getArtifactRoute(
+                artifact.artifact_type,
+                artifact.id
+              );
 
-                  {/* SECONDARY: artifact type + time */}
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="capitalize">
-                      {artifact.artifact_type.replace('_', ' ')}
-                    </span>
-                    <span>•</span>
-                    <span>
-                      {formatRelativeTime(artifact.created_at)}
-                    </span>
+              return (
+                <div
+                  key={artifact.id}
+                  onClick={() => {
+                    if (route) navigate(route);
+                  }}
+                  className="flex items-center justify-between rounded-md border p-3 cursor-pointer hover:bg-muted/50 transition"
+                >
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">
+                      {getArtifactDisplayName(artifact)}
+                    </p>
+
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className="capitalize">
+                        {artifact.artifact_type.replace('_', ' ')}
+                      </span>
+                      <span>•</span>
+                      <span>{formatRelativeTime(artifact.created_at)}</span>
+                    </div>
                   </div>
-                </div>
 
-                {artifact.advisor_feedback && (
-                  <Badge
-                    variant="outline"
-                    className="bg-[#DDD6FE] text-[#5B21B6] border-[#DDD6FE]"
-                  >
-                    Advisor Reviewed
-                  </Badge>
-                )}
-              </div>
-            ))}
+                  {artifact.advisor_feedback && (
+                    <Badge
+                      variant="outline"
+                      className="bg-[#DDD6FE] text-[#5B21B6] border-[#DDD6FE]"
+                    >
+                      Advisor Reviewed
+                    </Badge>
+                  )}
+                </div>
+              );
+            })}
+
           </CardContent>
         </Card>
 

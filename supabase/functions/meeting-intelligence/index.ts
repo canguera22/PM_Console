@@ -13,6 +13,36 @@ function isValidUUID(uuid: string): boolean {
   return uuidRegex.test(uuid);
 }
 
+// =====================================================
+// NEW: Fetch project context documents
+// =====================================================
+let projectContextText = '';
+
+try {
+  const { data: docs, error: docsError } = await supabase
+    .from('project_documents')
+    .select('name, extracted_text')
+    .eq('project_id', project_id)
+    .eq('status', 'active')
+    .not('extracted_text', 'is', null);
+
+  if (docsError) {
+    console.warn('⚠️ Failed to fetch project documents', docsError);
+  } else if (docs && docs.length > 0) {
+    projectContextText =
+      `\n\nPROJECT CONTEXT DOCUMENTS (for reference only):\n` +
+      docs
+        .map(
+          (d) =>
+            `\n---\nDocument: ${d.name}\n${d.extracted_text}`
+        )
+        .join('\n');
+  }
+} catch (err) {
+  console.warn('⚠️ Project document fetch error', err);
+}
+
+
 const SYSTEM_PROMPT = `You are a Meeting Intelligence Analyst specializing in extracting actionable insights from meeting transcripts.
 
 Your role:
@@ -120,7 +150,7 @@ serve(async (req) => {
     }
 
     // Build user message
-    let userMessage = `Please analyze this meeting transcript:\n\n${meeting_transcript}`;
+    let userMessage = `Please analyze this meeting transcript:\n\n${meeting_transcript}${projectContextText}`;
 
     if (meeting_type) {
       userMessage += `\n\nMeeting Type: ${meeting_type}`;

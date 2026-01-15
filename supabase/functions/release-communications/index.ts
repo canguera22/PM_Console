@@ -26,6 +26,30 @@ function isValidUUID(uuid: string): boolean {
   return uuidRegex.test(uuid);
 }
 
+async function getProjectContextText(projectId: string): Promise<string> {
+  const { data, error } = await supabase
+    .from('project_documents')
+    .select('name, extracted_text')
+    .eq('project_id', projectId)
+    .eq('status', 'active')
+    .not('extracted_text', 'is', null);
+
+  if (error) {
+    console.warn('⚠️ Failed to fetch project documents', error);
+    return '';
+  }
+
+  if (!data || data.length === 0) return '';
+
+  return data
+    .map(
+      (doc) =>
+        `### Project Context Document: ${doc.name}\n${doc.extracted_text}`
+    )
+    .join('\n\n');
+}
+
+
 // =====================================================
 // PROMPTS
 // =====================================================
@@ -265,10 +289,38 @@ serve(async (req) => {
       ? selected_outputs
       : [];
 
+
+    // ---------------------------
+    // Fetch project context documents
+    // ---------------------------
+    const projectContextText = await getProjectContextText(project_id);
+
     // ---------------------------
     // Build prompts
     // ---------------------------
-    const systemPrompt = buildSystemPrompt(selectedOutputs);
+    const baseSystemPrompt = buildSystemPrompt(selectedOutputs);
+
+    const systemPrompt = `
+    ${baseSystemPrompt}
+
+    ${projectContextText ? `
+    ================================
+    PROJECT CONTEXT (SOURCE DOCUMENTS)
+    ================================
+    ${projectContextText}
+
+    The following project context documents are AUTHORITATIVE.
+
+    REQUIREMENTS
+    - You MUST align terminology, scope, and framing to these documents.
+    - You MUST NOT introduce features, risks, or themes that contradict them.
+    - If the CSV omits rationale, intent, or framing, infer it ONLY from the project documents.
+    - If the CSV conflicts with the project documents:
+      - CSV wins for factual release contents
+      - Project documents win for intent, scope, and narrative framing
+    ` : ''}
+    `.trim();
+
 
     let userMessage = `Generate release documentation based on the following CSV.\n\n`;
     userMessage += `CSV DATA:\n${csv_data}\n\n`;

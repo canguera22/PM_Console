@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Copy, CheckCircle2, Loader2, Lightbulb } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Copy, CheckCircle2, Loader2, Lightbulb, Upload, X, FileText, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -16,12 +16,14 @@ import { toast } from 'sonner';
 import { supabaseFetch } from '@/lib/supabase';
 import { generateDocumentation } from '@/lib/documentation-agent';
 import { DocumentationSession, DocumentationFormData, OUTPUT_TYPES } from '@/types/documentation';
-import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import ReactMarkdown from 'react-markdown';
 import { callPMAdvisorAgent, fetchContextArtifacts, saveAdvisorReview } from '@/lib/pm-advisor';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
+import Papa from 'papaparse';
+import { supabase } from '@/lib/supabase';
+
 
 
 
@@ -43,12 +45,235 @@ type ProjectArtifactRow = {
 
 // Input toggle
 type InputMode = 'manual' | 'jira_csv';
+type ParsedCSV = {
+  headers: string[];
+  rows: any[];
+  rowCount: number;
+};
+
+type NormalizedJiraIssue = {
+  key: string;
+  issueType: string;
+  summary: string;
+  description: string;
+  epicKey: string | null;
+  parentKey: string | null;
+  status: string;
+  priority: string;
+  assignee: string;
+};
+
+function getFirstString(row: Record<string, any>, candidates: string[]): string {
+  for (const c of candidates) {
+    const v = row?.[c];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+function normalizeJiraRows(rows: any[]): NormalizedJiraIssue[] {
+  return (rows || [])
+    .map((r) => {
+      const key = getFirstString(r, ['Issue key', 'Issue Key', 'Key', 'IssueKey']);
+      const issueType = getFirstString(r, ['Issue Type', 'Issue type', 'Type']);
+      const summary = getFirstString(r, ['Summary', 'Issue summary', 'Title']);
+      const description = getFirstString(r, ['Description', 'Issue description', 'Details']);
+
+      const epicKey =
+        getFirstString(r, ['Epic Link', 'Epic Link (Key)', 'Epic key', 'Epic Key']) || null;
+
+      const parentKey =
+        getFirstString(r, ['Parent', 'Parent Key', 'Parent key', 'Parent issue']) || null;
+
+      const status = getFirstString(r, ['Status', 'Issue status']);
+      const priority = getFirstString(r, ['Priority']);
+      const assignee = getFirstString(r, ['Assignee', 'Assignee Name']);
+
+      return {
+        key,
+        issueType,
+        summary,
+        description,
+        epicKey,
+        parentKey,
+        status,
+        priority,
+        assignee,
+      };
+    })
+    .filter((i) => i.key || i.summary);
+}
+
+function buildEpicStoryModel(issues: NormalizedJiraIssue[]) {
+  const epics = issues.filter((i) => i.issueType.toLowerCase() === 'epic');
+  const epicsByKey = new Map(epics.map((e) => [e.key, e]));
+
+  const stories = issues.filter((i) => {
+    const t = i.issueType.toLowerCase();
+    return t.includes('story') || t.includes('task') || t.includes('bug');
+  });
+
+  const storiesWithEpic = stories.map((s) => ({
+    ...s,
+    epicKey: s.epicKey || s.parentKey || null,
+  }));
+
+  const grouped: Record<string, NormalizedJiraIssue[]> = {};
+  for (const s of storiesWithEpic) {
+    if (!s.epicKey) continue;
+    if (!grouped[s.epicKey]) grouped[s.epicKey] = [];
+    grouped[s.epicKey].push(s);
+  }
+
+  return {
+    epics: epics.map((e) => ({
+      key: e.key,
+      summary: e.summary,
+      description: e.description,
+      status: e.status,
+    })),
+    stories: storiesWithEpic.map((s) => ({
+      key: s.key,
+      issueType: s.issueType,
+      summary: s.summary,
+      description: s.description,
+      epicKey: s.epicKey,
+      status: s.status,
+      priority: s.priority,
+      assignee: s.assignee,
+    })),
+    storiesByEpicKey: grouped,
+    epicKeysFoundInStories: Object.keys(grouped),
+    epicKeysMissingFromExport: Object.keys(grouped).filter((k) => !epicsByKey.has(k)),
+  };
+}
+
 
 export default function ProductDocumentation() {
   const navigate = useNavigate();
   const { activeProject } = useActiveProject();
+  const [searchParams] = useSearchParams();
+  const artifactIdFromUrl = searchParams.get('artifact');
   const [inputMode, setInputMode] = useState<InputMode>('manual');
   const [isGenerating, setIsGenerating] = useState(false);
+  // CSV upload state (for jira_csv mode)
+const [csvFile, setCsvFile] = useState<File | null>(null);
+const [csvData, setCsvData] = useState<string>('');
+const [parsedCsv, setParsedCsv] = useState<ParsedCSV | null>(null);
+const [isParsingCsv, setIsParsingCsv] = useState(false);
+const [csvError, setCsvError] = useState<string | null>(null);
+const [isDragging, setIsDragging] = useState(false);
+const [outputByType, setOutputByType] = useState<Record<string, string>>({});
+const [activeOutputSheet, setActiveOutputSheet] = useState<string>('');
+
+
+const resetCsvState = () => {
+  setCsvFile(null);
+  setCsvData('');
+  setParsedCsv(null);
+  setCsvError(null);
+  setIsParsingCsv(false);
+  setIsDragging(false);
+};
+
+const handleCsvFileChange = (file: File | null) => {
+  if (!file) {
+    resetCsvState();
+    return;
+  }
+
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    setCsvError('Please upload a .csv file');
+    toast.error('Please upload a .csv file');
+    return;
+  }
+
+  if (file.size > 10 * 1024 * 1024) {
+    setCsvError('File too large (max 10MB)');
+    toast.error('File too large (max 10MB)');
+    return;
+  }
+
+  setCsvFile(file);
+  setCsvData('');
+  setParsedCsv(null);
+  setCsvError(null);
+  setIsParsingCsv(true);
+
+  const reader = new FileReader();
+
+  reader.onload = (e) => {
+    const text = (e.target?.result as string) || '';
+    setCsvData(text);
+
+    Papa.parse(text, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        if (results.errors?.length) {
+          const msg = results.errors[0].message;
+          setCsvError(`CSV parsing error: ${msg}`);
+          toast.error(`CSV parsing error: ${msg}`);
+          setParsedCsv(null);
+          setIsParsingCsv(false);
+          return;
+        }
+
+       const headers = results.meta.fields || [];
+      const rows = (results.data as any[]) || [];
+
+      console.log('📎 CSV headers:', headers);
+      console.log('📎 CSV sample rows:', rows.slice(0, 5));
+        setParsedCsv({ headers, rows, rowCount: rows.length });
+        setIsParsingCsv(false);
+
+        toast.success(`CSV loaded: ${rows.length} rows`);
+      },
+      error: (err) => {
+        setCsvError(`Failed to parse CSV: ${err.message}`);
+        toast.error(`Failed to parse CSV: ${err.message}`);
+        setParsedCsv(null);
+        setIsParsingCsv(false);
+      },
+    });
+  };
+
+  
+
+  reader.onerror = () => {
+    setCsvError('Failed to read file');
+    toast.error('Failed to read CSV file');
+    setParsedCsv(null);
+    setIsParsingCsv(false);
+  };
+
+  reader.readAsText(file);
+};
+
+const handleCsvFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const files = e.target.files;
+  if (files && files.length > 0) handleCsvFileChange(files[0]);
+};
+
+const clearCsvFile = () => handleCsvFileChange(null);
+
+const handleDragOver = useCallback((e: React.DragEvent) => {
+  e.preventDefault();
+  setIsDragging(true);
+}, []);
+
+const handleDragLeave = useCallback((e: React.DragEvent) => {
+  e.preventDefault();
+  setIsDragging(false);
+}, []);
+
+const handleDrop = useCallback((e: React.DragEvent) => {
+  e.preventDefault();
+  setIsDragging(false);
+  const files = Array.from(e.dataTransfer.files);
+  if (files.length > 0) handleCsvFileChange(files[0]);
+}, []);
+
 
   const [formData, setFormData] = useState<DocumentationFormData>({
     input_name: '',
@@ -68,7 +293,10 @@ export default function ProductDocumentation() {
   });
 
   const [selectedOutputs, setSelectedOutputs] = useState<string[]>([]);
-  const [currentOutput, setCurrentOutput] = useState<string>('');
+  const [currentOutput, setCurrentOutput] = useState<string>(''); // keep for backward compatibility / history
+  const [currentOutputs, setCurrentOutputs] = useState<Record<string, string>>({});
+  const [activeOutputName, setActiveOutputName] = useState<string>('');
+
   const [sessionHistory, setSessionHistory] = useState<DocumentationSession[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 
@@ -91,6 +319,17 @@ export default function ProductDocumentation() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject]);
+
+  useEffect(() => {
+  if (!artifactIdFromUrl || !activeProject) return;
+
+  // Prevent double-loading if already selected
+  if (currentSessionId === artifactIdFromUrl) return;
+
+  void loadArtifactById(artifactIdFromUrl);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [artifactIdFromUrl, activeProject]);
+
 
   const artifactToDocumentationSession = (a: ProjectArtifactRow): DocumentationSession => {
     const input = (a.input_data ?? {}) as Record<string, any>;
@@ -125,6 +364,26 @@ export default function ProductDocumentation() {
   };
 
   const loadSessionHistory = async () => {
+    const loadArtifactById = async (artifactId: string) => {
+  if (!activeProject) return;
+
+  try {
+    const artifacts = await supabaseFetch<ProjectArtifactRow[]>(
+      `/project_artifacts?id=eq.${artifactId}&status=eq.active`
+    );
+
+    if (!artifacts || artifacts.length === 0) {
+      toast.error('Artifact not found');
+      return;
+    }
+
+    const session = artifactToDocumentationSession(artifacts[0]);
+    loadSession(session);
+  } catch (err) {
+    console.error('Error loading artifact by ID:', err);
+    toast.error('Failed to load documentation');
+  }
+};
     if (!activeProject) return;
     try {
       setIsLoadingHistory(true);
@@ -145,6 +404,34 @@ export default function ProductDocumentation() {
     }
   };
 
+  const loadArtifactById = async (artifactId: string) => {
+  if (!activeProject) return;
+
+  try {
+    const rows = await supabaseFetch<ProjectArtifactRow[]>(
+      `/project_artifacts?id=eq.${artifactId}` +
+        `&project_id=eq.${activeProject.id}` +
+        `&artifact_type=eq.product_documentation` +
+        `&status=eq.active` +
+        `&limit=1`
+    );
+
+    if (!rows || rows.length === 0) {
+      toast.error('Artifact not found');
+      return;
+    }
+
+    const session = artifactToDocumentationSession(rows[0]);
+
+    // Load exactly like clicking from history
+    loadSession(session);
+  } catch (err) {
+    console.error('Failed to load artifact by id:', err);
+    toast.error('Failed to load documentation session');
+  }
+};
+
+
   const handleInputChange = (field: keyof DocumentationFormData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
@@ -152,22 +439,60 @@ export default function ProductDocumentation() {
   const toggleOutput = (output: string) => {
     setSelectedOutputs((prev) => (prev.includes(output) ? prev.filter((o) => o !== output) : [...prev, output]));
   };
+function parseOutputsByMarker(raw: string): Record<string, string> {
+  const lines = raw.split('\n');
+  const sections: Record<string, string> = {};
 
-  const isFormValid = () => {
-    const requiredFields: (keyof DocumentationFormData)[] = [
-      'input_name',
-      'problem_statement',
-      'target_user_persona',
-      'business_goals',
-      'assumptions_constraints',
-      'functional_requirements',
-      'dependencies',
-    ];
-    return requiredFields.every((field) => formData[field].trim() !== '') && selectedOutputs.length > 0;
+  let currentName: string | null = null;
+  let buf: string[] = [];
+
+  const flush = () => {
+    if (currentName) sections[currentName] = buf.join('\n').trim();
+    buf = [];
   };
+
+  for (const line of lines) {
+    const m = line.match(/^<!-- OUTPUT:\s*(.+?)\s*-->$/);
+    if (m) {
+      flush();
+      currentName = m[1].trim();
+      continue;
+    }
+    buf.push(line);
+  }
+  flush();
+
+  return sections;
+}
+  const isFormValid = () => {
+  // Always require artifact name + at least one output
+  if (!formData.input_name.trim() || selectedOutputs.length === 0) return false;
+
+  if (inputMode === 'jira_csv') {
+    // CSV mode requirements
+    return !!csvData && !csvError && !isParsingCsv;
+  }
+
+  // Manual mode requirements
+  const requiredFields: (keyof DocumentationFormData)[] = [
+    'problem_statement',
+    'target_user_persona',
+    'business_goals',
+    'assumptions_constraints',
+    'functional_requirements',
+    'dependencies',
+  ];
+
+  return requiredFields.every((field) => (formData[field] ?? '').trim() !== '');
+};
+
 
   const handleGenerate = async () => {
     setError(null);
+
+    if (isGenerating) return;
+    setIsGenerating(true);
+
 
     if (!isFormValid()) {
       const errorMsg = 'Please fill in all required fields and select at least one output type';
@@ -175,13 +500,54 @@ export default function ProductDocumentation() {
       toast.error(errorMsg);
       return;
     }
-
+    if (inputMode === 'jira_csv' && isParsingCsv) {
+      const msg = 'CSV is still being processed. Please wait and try again.';
+      setError(msg);
+      toast.error(msg);
+      return;
+    }
     if (!activeProject) {
       const errorMsg = 'No active project selected';
       setError(errorMsg);
       toast.error(errorMsg);
       return;
     }
+
+  const payload = {
+    project_id: activeProject.id,
+    project_name: activeProject.name,
+    input_mode: inputMode,
+    selected_outputs: selectedOutputs,
+    artifact_name: formData.input_name.trim(),
+    ...formData,
+    ...(inputMode === 'jira_csv'
+  ? (() => {
+      const rawRows = parsedCsv?.rows ?? [];
+      const normalizedIssues = normalizeJiraRows(rawRows);
+      const epicStoryModel = buildEpicStoryModel(normalizedIssues);
+
+      console.log('🧩 normalizedIssues sample:', normalizedIssues.slice(0, 5));
+      console.log('🧩 epicStoryModel:', epicStoryModel);
+
+      return {
+        csv_filename: csvFile?.name ?? null,
+        csv_row_count: parsedCsv?.rowCount ?? null,
+        jira_issues_normalized: normalizedIssues.slice(0, 300),
+        epic_story_model: epicStoryModel,
+      };
+    })()
+  : {}),
+  };
+
+
+    console.log('🚀 [DocGen Payload] keys:', Object.keys(payload));
+    console.log('🚀 [DocGen Payload] csv:', {
+      input_mode: payload.input_mode,
+      csv_data_len: (payload as any).csv_data?.length ?? 0,
+      jira_csv_text_len: (payload as any).jira_csv_text?.length ?? 0,
+      jira_issues_rows: Array.isArray((payload as any).jira_issues) ? (payload as any).jira_issues.length : 'not-array',
+      parsedCsv_rows: Array.isArray((payload as any).parsedCsv) ? (payload as any).parsedCsv.length : 'not-array',
+    });
 
     setIsGenerating(true);
     console.log('👤 [User Action] Clicked "Generate Documentation" button');
@@ -191,24 +557,59 @@ export default function ProductDocumentation() {
       projectId: activeProject.id,
     });
 
-    try {
-      const payload = {
-        project_id: activeProject.id,
-        project_name: activeProject.name,
-        ...formData,
-        selected_outputs: selectedOutputs,
-      };
+console.log('🧪 payload.selected_outputs', payload.selected_outputs);
+const hasCsvInputFrontend =
+  !!csvData ||
+  (Array.isArray(parsedCsv?.rows) && parsedCsv.rows.length > 0);
 
+console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
+
+const cleanedPayload = {
+  project_id: payload.project_id,
+  project_name: payload.project_name,
+  artifact_name: payload.artifact_name,
+  input_mode: payload.input_mode,
+  selected_outputs: payload.selected_outputs,
+
+  input: {
+    problem_statement: payload.problem_statement,
+    target_user_persona: payload.target_user_persona,
+    business_goals: payload.business_goals,
+    assumptions_constraints: payload.assumptions_constraints,
+    functional_requirements: payload.functional_requirements,
+    dependencies: payload.dependencies,
+
+    // optional
+    non_functional_requirements: payload.non_functional_requirements || undefined,
+    success_metrics: payload.success_metrics || undefined,
+  },
+
+  csv: inputMode === 'jira_csv'
+    ? {
+        filename: csvFile?.name,
+        row_count: parsedCsv?.rowCount,
+        issues: payload.jira_issues_normalized,
+        epic_model: payload.epic_story_model,
+      }
+    : undefined,
+};
+
+    try {
       const result = await callAgentWithLogging(
         'Product Documentation',
         'product-documentation',
         payload,
-        () =>
-          generateDocumentation({
-            // If generateDocumentation input type doesn’t include project_id, update it.
-            ...(payload as any),
-          })
+        async () => {
+          const { data, error } = await supabase.functions.invoke('product-documentation', {
+            body: payload,
+          });
+          if (error) throw error;
+          return data;
+        }
       );
+
+      setCurrentOutput(result.output);
+
 
       console.log('✨ [Success] Received AI-generated documentation', { outputLength: result.output.length });
 
@@ -224,10 +625,15 @@ export default function ProductDocumentation() {
           artifact_type: 'product_documentation',
           artifact_name: artifactName,
           input_data: {
-            input_name: formData.input_name,
-            ...formData,
-            selected_outputs: selectedOutputs,
-          },
+              input_name: formData.input_name,
+              ...formData,
+              selected_outputs: selectedOutputs,
+              input_mode: inputMode,
+
+              csv_filename: inputMode === 'jira_csv' ? csvFile?.name ?? null : null,
+              csv_row_count: inputMode === 'jira_csv' ? parsedCsv?.rowCount ?? null : null,
+            },
+
           output_data: result.output,
           metadata: {
             module_type: 'product_documentation',
@@ -238,7 +644,18 @@ export default function ProductDocumentation() {
 
       console.log('💾 [Database] Saved successfully');
 
+      // TEMP: until backend returns per-output blocks
       setCurrentOutput(result.output);
+
+      const parsed = parseOutputsByMarker(result.output);
+      const sheetMap =
+        Object.keys(parsed).length > 0
+          ? parsed
+          : { [selectedOutputs[0] || 'Output']: result.output };
+
+      setOutputByType(sheetMap);
+      setActiveOutputSheet(Object.keys(sheetMap)[0] || '');
+
       setAdvisorOutput(''); // reset advisor for the new artifact
 
       if (saved && saved.length > 0) {
@@ -284,14 +701,19 @@ export default function ProductDocumentation() {
       console.log('🔍 [Context] Fetching context artifacts from other modules...');
       const contextArtifacts = await fetchContextArtifacts(activeProject.id);
 
+      const outputToReview =
+  (activeOutputSheet && outputByType[activeOutputSheet])
+    ? outputByType[activeOutputSheet]
+    : currentOutput;
+
       const advisorPayload = {
-        artifact_output: currentOutput,
+        artifact_output: outputToReview,
         module_type: 'product_documentation',
         project_id: activeProject.id,
         project_name: activeProject.name,
         source_session_table: 'project_artifacts',
-        source_session_id: currentSessionId, // artifact UUID
-        artifact_type: 'PRD',
+        source_session_id: currentSessionId,
+        artifact_type: activeOutputSheet || 'Product Documentation',
         selected_outputs: selectedOutputs,
         context_artifacts: contextArtifacts,
       };
@@ -382,43 +804,46 @@ export default function ProductDocumentation() {
     toast.success('Session loaded');
   };
 
+const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
+  'PRD': { badge: 'Manual', note: 'Best from manual inputs (not CSV).' },
+  'Epics': { badge: 'Manual', note: 'Best from manual inputs (not CSV).' },
+  'Epic Impact Statements': { badge: 'Manual + CSV', note: 'Works from either manual inputs or epic CSV.' },
+  'User Stories': { badge: 'CSV best', note: 'Best from Epic CSV (or Epics input).' },
+  'Acceptance Criteria': { badge: 'Manual + CSV', note: 'Works from either; best if epics/stories exist.' },
+  'Out of Scope': { badge: 'Manual + CSV' },
+  'Risks / Mitigations': { badge: 'Manual + CSV' },
+  'Dependency Mapping': { badge: 'Manual + CSV' },
+  'Success Metrics / KPI Drafts': { badge: 'Manual + CSV' },
+  // If this exists in OUTPUT_TYPES, we’ll filter it out in the UI below:
+  'Release Notes Draft': { badge: 'Use Release Notes module' },
+};
+
+
   return (
     <div className="min-h-screen bg-[#F9FAFB]">
       {/* Header */}
       <div className="border-b border-[#E5E7EB] bg-white shadow-sm">
-        <div className="container mx-auto px-4 py-6 sm:px-6 lg:px-8">
+        <div className="container mx-auto px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-4">
-            <div>
+            <div className="flex items-center gap-4">
               <Button
                 variant="ghost"
+                size="sm"
                 onClick={() => navigate('/')}
-                className="mb-3 text-[#6B7280] hover:text-[#111827]"
+                className="gap-2 text-[#6B7280] hover:text-[#111827]"
               >
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Dashboard
+                <ArrowLeft className="h-4 w-4" />
+                Back
               </Button>
-              <h1 className="text-[28px] font-bold tracking-tight text-[#111827]">
-                Product Documentation Generator
-              </h1>
-              <p className="mt-2 text-sm text-[#6B7280]">
-                Generate comprehensive product documentation from your requirements
-              </p>
+              <Separator orientation="vertical" className="h-6" />
+              <div>
+                <h1 className="text-xl font-semibold text-[#111827]">Product Documentation Generator</h1>
+                <p className="text-sm text-[#6B7280]">Generate comprehensive product documentation based on your requirements</p>
+              </div>
             </div>
-            <ActiveProjectSelector />
           </div>
         </div>
       </div>
-
-      {/* Active Project Indicator */}
-      {activeProject && (
-        <div className="border-b border-[#E5E7EB] bg-[#F9FAFB]">
-          <div className="container mx-auto px-4 py-2 sm:px-6 lg:px-8">
-            <p className="text-xs text-[#6B7280]">
-              Project: <span className="font-medium text-[#111827]">{activeProject.name}</span>
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Main Content */}
       <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
@@ -704,15 +1129,95 @@ export default function ProductDocumentation() {
 
                   {/* CSV MODE — MUST BE SIBLING, NOT NESTED */}
                   {inputMode === 'jira_csv' && (
-                    <Card className="border-dashed">
-                      <CardContent className="py-6 text-center space-y-3">
-                        <p className="text-sm font-medium">Upload Jira CSV (coming next)</p>
-                        <p className="text-xs text-gray-500">
-                          This will allow you to generate user stories from Jira epics.
+                  <Card className="border-dashed">
+                    <CardContent className="py-6 space-y-4">
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-[#111827]">Upload Jira CSV</p>
+                        <p className="text-xs text-[#6B7280]">
+                          Upload a Jira CSV export. We’ll parse it and use it as the input source for documentation generation.
                         </p>
-                      </CardContent>
-                    </Card>
-                  )}
+                      </div>
+
+                      {/* Upload box */}
+                      <div
+                        className={`relative rounded-lg border-2 border-dashed p-6 transition-colors ${
+                          isDragging
+                            ? 'border-[#3B82F6] bg-[#3B82F6]/5'
+                            : csvError
+                            ? 'border-red-400 bg-red-50'
+                            : csvFile
+                            ? 'border-[#3B82F6] bg-[#3B82F6]/5'
+                            : 'border-[#E5E7EB] hover:border-[#D1D5DB]'
+                        }`}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                      >
+                        {!csvFile ? (
+                          <>
+                            <input
+                              type="file"
+                              accept=".csv"
+                              onChange={handleCsvFileInputChange}
+                              className="absolute inset-0 cursor-pointer opacity-0"
+                            />
+                            <div className="flex flex-col items-center justify-center text-center gap-2">
+                              <Upload className="h-10 w-10 text-[#6B7280]" />
+                              <p className="text-sm font-medium text-[#111827]">Drop CSV here</p>
+                              <p className="text-xs text-[#6B7280]">or click to browse</p>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FileText className="h-5 w-5 text-[#3B82F6]" />
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-[#111827] truncate">{csvFile.name}</p>
+                                <p className="text-xs text-[#6B7280]">
+                                  {isParsingCsv
+                                    ? 'Parsing CSV…'
+                                    : parsedCsv
+                                    ? `${parsedCsv.rowCount} rows loaded`
+                                    : 'Ready'}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* IMPORTANT: This button does NOT reopen file dialog */}
+                            <button
+                              type="button"
+                              onClick={clearCsvFile}
+                              className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-800"
+                              disabled={isParsingCsv}
+                            >
+                              <X className="h-4 w-4" />
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {csvError && (
+                        <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3">
+                          <AlertCircle className="h-4 w-4 text-red-600 mt-0.5" />
+                          <p className="text-xs text-red-700">{csvError}</p>
+                        </div>
+                      )}
+
+                      {/* Tiny preview */}
+                      {parsedCsv && parsedCsv.headers?.length > 0 && (
+                        <div className="rounded-md border border-[#E5E7EB] bg-white p-3">
+                          <p className="text-xs font-medium text-[#111827] mb-2">Detected columns</p>
+                          <p className="text-xs text-[#6B7280]">
+                            {parsedCsv.headers.slice(0, 8).join(', ')}
+                            {parsedCsv.headers.length > 8 ? '…' : ''}
+                          </p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
 
                 </div>
               </ScrollArea>
@@ -720,74 +1225,109 @@ export default function ProductDocumentation() {
           </Card>
           </div>
           {/* Middle Panel - Output Selection */}
-          <div className="lg:col-span-3">
-            <Card>
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg font-semibold text-[#111827]">Select Outputs to Generate</CardTitle>
-                <CardDescription className="text-sm text-[#6B7280]">Choose at least one output type</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {OUTPUT_TYPES.map((output) => (
-                    <div
-                      key={output}
-                      className="flex items-start space-x-3 rounded-lg border border-[#E5E7EB] p-3 transition-colors hover:bg-[#F9FAFB]"
-                    >
-                      <Checkbox
-                        id={output}
-                        checked={selectedOutputs.includes(output)}
-                        onCheckedChange={() => toggleOutput(output)}
-                      />
-                      <Label htmlFor={output} className="cursor-pointer text-sm font-normal leading-tight text-[#374151]">
-                        {output}
-                      </Label>
+            <div className="lg:col-span-3">
+              <Card>
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-lg font-semibold text-[#111827]">Select Outputs to Generate</CardTitle>
+                  <CardDescription className="text-sm text-[#6B7280]">Choose at least one output type</CardDescription>
+                </CardHeader>
+
+                <CardContent>
+                  <div className="space-y-3">
+                    {OUTPUT_TYPES
+                      .filter((o) => o !== 'Release Notes Draft') // ✅ remove this output in this module
+                      .map((output) => {
+                        const meta = OUTPUT_UI[output] || {};
+                        return (
+                          <div
+                            key={output}
+                            className="rounded-lg border border-[#E5E7EB] p-3 transition-colors hover:bg-[#F9FAFB]"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start space-x-3">
+                                <Checkbox
+                                  id={output}
+                                  checked={selectedOutputs.includes(output)}
+                                  onCheckedChange={() => toggleOutput(output)}
+                                />
+                                <div>
+                                  <Label
+                                    htmlFor={output}
+                                    className="cursor-pointer text-sm font-medium leading-tight text-[#111827]"
+                                  >
+                                    {output}
+                                  </Label>
+                                  {meta.note && <p className="mt-1 text-xs text-[#6B7280]">{meta.note}</p>}
+                                </div>
+                              </div>
+
+                              {meta.badge && (
+                                <Badge variant="secondary" className="text-[11px] whitespace-nowrap">
+                                  {meta.badge}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+
+                  {/* CSV guidance callout */}
+                  {inputMode === 'jira_csv' && (
+                    <div className="mt-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-3">
+                      <p className="text-xs font-medium text-[#111827]">CSV tip</p>
+                      <p className="mt-1 text-xs text-[#6B7280]">
+                        Jira CSV works best for <span className="font-medium">User Stories</span> (and also helps with Acceptance Criteria,
+                        Dependencies, Risks, and Scope). For <span className="font-medium">PRD</span> and <span className="font-medium">Epics</span>,
+                        use Manual Entry.
+                      </p>
                     </div>
-                  ))}
-                </div>
-
-                <Separator className="my-6 bg-[#E5E7EB]" />
-
-                <Button className="w-full" size="lg" onClick={handleGenerate} disabled={!isFormValid() || isGenerating}>
-                  {isGenerating ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Generating your documentation...
-                    </>
-                  ) : (
-                    'Generate Documentation'
                   )}
-                </Button>
 
-                <Button
-                  variant="outline"
-                  className="w-full mt-3"
-                  size="lg"
-                  onClick={handleRunAdvisorReview}
-                  disabled={!currentOutput || isRunningAdvisor}
-                >
-                  {isRunningAdvisor ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Running PM Advisor Review...
-                    </>
-                  ) : (
-                    <>
-                      <Lightbulb className="mr-2 h-4 w-4" />
-                      Run PM Advisor Review
-                    </>
+                  <Separator className="my-6 bg-[#E5E7EB]" />
+
+                  <Button className="w-full" size="lg" onClick={handleGenerate} disabled={!isFormValid() || isGenerating}>
+                    {isGenerating ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Generating your documentation...
+                      </>
+                    ) : (
+                      'Generate Documentation'
+                    )}
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    className="w-full mt-3"
+                    size="lg"
+                    onClick={handleRunAdvisorReview}
+                    disabled={(!currentOutput && Object.keys(outputByType).length === 0) || isRunningAdvisor}
+                  >
+                    {isRunningAdvisor ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Running PM Advisor Review...
+                      </>
+                    ) : (
+                      <>
+                        <Lightbulb className="mr-2 h-4 w-4" />
+                        Run PM Advisor Review
+                      </>
+                    )}
+                  </Button>
+
+                  {advisorError && <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />}
+
+                  {!isFormValid() && (
+                    <p className="mt-2 text-center text-xs text-[#9CA3AF]">
+                      {selectedOutputs.length === 0 ? 'Select at least one output type' : 'Fill in all required fields'}
+                    </p>
                   )}
-                </Button>
+                </CardContent>
+              </Card>
+            </div>
 
-                {advisorError && <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />}
-
-                {!isFormValid() && (
-                  <p className="mt-2 text-center text-xs text-[#9CA3AF]">
-                    {selectedOutputs.length === 0 ? 'Select at least one output type' : 'Fill in all required fields'}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
 
           {/* Right Panel - Results Display */}
           <div className="lg:col-span-5">
@@ -804,28 +1344,67 @@ export default function ProductDocumentation() {
                   </TabsList>
 
                   <TabsContent value="current" className="mt-4">
-                    {currentOutput ? (
-                      <div className="space-y-4">
-                        <div className="flex justify-end">
-                          <Button variant="outline" size="sm" onClick={handleCopyToClipboard}>
-                            <Copy className="mr-2 h-4 w-4" />
-                            Copy to Clipboard
-                          </Button>
-                        </div>
-                        <ScrollArea className="h-[calc(100vh-360px)]">
-                          <div className="prose prose-sm max-w-none pr-4 dark:prose-invert">
-                            <ReactMarkdown>{currentOutput}</ReactMarkdown>
-                          </div>
-                        </ScrollArea>
+                  {Object.keys(outputByType || {}).length > 0 ? (
+                    <div className="space-y-4">
+                      {/* Output Sheets Tabs */}
+                      <Tabs
+                        value={activeOutputSheet || Object.keys(outputByType)[0]}
+                        onValueChange={setActiveOutputSheet}
+                      >
+                        <TabsList className="flex flex-wrap justify-start gap-2 bg-transparent p-0">
+                          {Object.keys(outputByType).map((key) => (
+                            <TabsTrigger key={key} value={key}>
+                              {key}
+                            </TabsTrigger>
+                          ))}
+                        </TabsList>
+
+                        {Object.entries(outputByType).map(([key, md]) => (
+                          <TabsContent key={key} value={key} className="mt-4">
+                            <div className="flex justify-end">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => navigator.clipboard.writeText(md)}
+                              >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy {key}
+                              </Button>
+                            </div>
+
+                            <ScrollArea className="h-[calc(100vh-420px)]">
+                              <div className="prose prose-sm max-w-none pr-4 dark:prose-invert">
+                                <ReactMarkdown>{md}</ReactMarkdown>
+                              </div>
+                            </ScrollArea>
+                          </TabsContent>
+                        ))}
+                      </Tabs>
+                    </div>
+                  ) : currentOutput ? (
+                    // Backward compatibility: if you still have only a single string output
+                    <div className="space-y-4">
+                      <div className="flex justify-end">
+                        <Button variant="outline" size="sm" onClick={handleCopyToClipboard}>
+                          <Copy className="mr-2 h-4 w-4" />
+                          Copy to Clipboard
+                        </Button>
                       </div>
-                    ) : (
-                      <div className="flex h-[calc(100vh-360px)] items-center justify-center border-2 border-dashed border-[#E5E7EB] rounded-lg">
-                        <div className="text-center text-[#9CA3AF] px-4">
-                          <p className="text-sm">Generate documentation to see results</p>
+                      <ScrollArea className="h-[calc(100vh-360px)]">
+                        <div className="prose prose-sm max-w-none pr-4 dark:prose-invert">
+                          <ReactMarkdown>{currentOutput}</ReactMarkdown>
                         </div>
+                      </ScrollArea>
+                    </div>
+                  ) : (
+                    <div className="flex h-[calc(100vh-360px)] items-center justify-center border-2 border-dashed border-[#E5E7EB] rounded-lg">
+                      <div className="text-center text-[#9CA3AF] px-4">
+                        <p className="text-sm">Generate documentation to see results</p>
                       </div>
-                    )}
-                  </TabsContent>
+                    </div>
+                  )}
+                </TabsContent>
+
 
                   <TabsContent value="advisor" className="mt-4">
                     <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />

@@ -300,6 +300,42 @@ serve(async (req) => {
       .neq('artifact_type', 'pm_advisor')
       .order('created_at', { ascending: false });
 
+
+
+      // ---------------------------------------------
+      // STEP 2: Load project context documents
+      // ---------------------------------------------
+      const { data: projectDocs, error: docsError } = await supabase
+        .from('project_documents')
+        .select('id, name, extracted_text, created_at')
+        .eq('project_id', project_id)
+        .eq('status', 'active')
+        .not('extracted_text', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (docsError) {
+        console.warn('⚠️ Failed to load project documents', docsError);
+      }
+
+      const projectDocsContext =
+      Array.isArray(projectDocs) && projectDocs.length > 0
+        ? projectDocs
+            .filter(d => d.extracted_text && d.extracted_text.trim().length > 0)
+            .slice(0, 5) // hard cap for token safety
+            .map(d => {
+              const text = d.extracted_text!;
+              const snippet =
+                text.length > 3000
+                  ? `${text.slice(0, 1500)}\n\n[... truncated ...]\n\n${text.slice(-1000)}`
+                  : text;
+
+              return `### ${d.name}\n${snippet}`;
+            })
+            .join('\n\n')
+        : '';
+
+
     if (fetchError) {
       console.error('❌ [Database Error]', fetchError);
     } else {
@@ -308,6 +344,7 @@ serve(async (req) => {
 
     const allArtifacts = Array.isArray(rawArtifacts) ? rawArtifacts : [];
 
+    
     // Determine artifact content to review
     let artifactToReview = artifact_output;
 
@@ -357,16 +394,29 @@ serve(async (req) => {
 - reviewed_artifact_id: ${artifact_id || '(not provided)'}
 `;
 
-    if (selected_outputs && Array.isArray(selected_outputs) && selected_outputs.length > 0) {
-      userMessage += `- selected_outputs:\n${selected_outputs.map((o: string) => `  - ${o}`).join('\n')}\n`;
-    }
+if (selected_outputs && Array.isArray(selected_outputs) && selected_outputs.length > 0) {
+  userMessage += `- selected_outputs:\n${selected_outputs
+    .map((o: string) => `  - ${o}`)
+    .join('\n')}\n`;
+}
 
-    userMessage += `
+userMessage += `
 
 ## Artifact Content (to review)
 \`\`\`markdown
 ${artifactForPrompt}
 \`\`\`
+`;
+
+if (projectDocsContext) {
+  userMessage += `
+
+## Project Context Documents (FOUNDATIONAL — not artifacts)
+${projectDocsContext}
+`;
+}
+
+userMessage += `
 
 ## Project Artifact Index (you MUST cite artifact_id for cross-artifact claims)
 ${indexText}
@@ -497,6 +547,7 @@ ${output}
           duration_ms: duration,
           model: 'gpt-4o',
           temperature: 0.2,
+          context_documents_used: projectDocsContext ? true : false,
           context_artifacts: included.map((a: any) => ({
             id: a.id,
             type: a.type,
@@ -517,13 +568,6 @@ ${output}
       });
     }
 
-    // Update the reviewed artifact with advisor feedback (optional)
-      if (updateError) {
-        console.error('❌ [Database Error] Failed to update artifact', updateError);
-      } else {
-        console.log('✅ [Database] Artifact updated with advisor feedback');
-      }
-    }
 
     return new Response(
       JSON.stringify({
