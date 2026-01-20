@@ -1,5 +1,52 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+type OutputKey =
+  | 'prd'
+  | 'epics'
+  | 'epic_impact'
+  | 'user_stories'
+  | 'acceptance_criteria'
+  | 'out_of_scope'
+  | 'risks'
+  | 'dependencies'
+  | 'kpis';
+
+function normalizeOutputName(o: string): OutputKey {
+  const key = o.trim().toLowerCase();
+
+  const map: Record<string, OutputKey> = {
+    prd: 'prd',
+    epics: 'epics',
+    epic_impact: 'epic_impact',
+    'epic impact': 'epic_impact',
+
+    user_stories: 'user_stories',
+    'user stories': 'user_stories',
+
+    acceptance_criteria: 'acceptance_criteria',
+    'acceptance criteria': 'acceptance_criteria',
+
+    out_of_scope: 'out_of_scope',
+    'out of scope': 'out_of_scope',
+
+    risks: 'risks',
+    'risks / mitigations': 'risks',
+
+    dependencies: 'dependencies',
+    'dependency mapping': 'dependencies',
+
+    kpis: 'kpis',
+    'success metrics / kpi drafts': 'kpis',
+  };
+
+  if (!map[key]) {
+    throw new Error(`Unknown output type received: "${o}"`);
+  }
+
+  return map[key];
+}
+
+
 
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -103,13 +150,13 @@ Formatting rules:
 
 type SourceMode = 'manual_only' | 'csv_only' | 'either';
 
-const OUTPUT_SPECS: Record<string, {
+const OUTPUT_SPECS: Record<OutputKey, {
   source: SourceMode;
   purpose: string;
   format: string;
   rules: string[];
 }> = {
-  'prd': {
+  prd: {
     source: 'manual_only',
     purpose: 'Implementation-ready PRD. DO NOT use CSV as source-of-truth for PRD content.',
     format: `
@@ -136,13 +183,13 @@ const OUTPUT_SPECS: Record<string, {
     ]
   },
 
-  'epics': {
+  epics: {
     source: 'manual_only',
     purpose: 'High-quality epics derived from manual inputs only.',
     format: `
 ## Output Format
 - 4–10 epics
-- Each epic includes: Title, 1–2 sentence intent, In/Out, and 2–4 acceptance bullets
+- Each epic includes: Title, 2-4 sentence intent, In/Out, and 2–8 acceptance bullets
 `.trim(),
     rules: [
       'Do not use CSV as the primary source for epics.',
@@ -150,108 +197,133 @@ const OUTPUT_SPECS: Record<string, {
     ]
   },
 
-  'Epic Impact Statements': {
+  epic_impact: {
     source: 'either',
-    purpose: 'Concise “why it matters” statements per epic, can be derived from epic text (CSV or manual).',
+    purpose: 'Concise “why it matters” statements per epic.',
     format: `
 ## Output Format
 For each epic:
 - Epic: <title>
 - Impact Statement: 1–2 sentences (business + user impact)
-- KPI it should move: 1–2 bullets
+- KPI it should move: 1–3 bullets
 `.trim(),
     rules: [
       'Tie impact to actual epic text; don’t invent big new scope.'
     ]
   },
 
-  'user stories': {
-    source: 'either', // but best with epics/csv
-    purpose: 'INVEST user stories grouped under epics (prefer epic source-of-truth).',
-    format: `
-## Output Format (STRICT)
-For EACH epic:
-### Epic: <Epic Title> (Priority: <Priority> | Tags: <Tags>)
-Short intent: 1 sentence.
+  user_stories: {
+  source: 'either',
+  purpose: 'INVEST user stories grouped under epics. Output must be structured for direct use in Jira/Linear.',
+  format: `
+## REQUIRED STRUCTURE (STRICT — FOLLOW EXACTLY)
 
-#### Story 1 — <Short story title>
+For EACH epic, use the following structure:
+
+## Epic: <Epic Name>
+**Priority:** <High | Medium | Low>
+**Tags:** <comma-separated list>
+
+**Intent:**  
+<1–2 sentence description of why this epic exists and what outcome it drives>
+
+---
+
+For EACH story under the epic:
+
+### Story: <Short, descriptive story title>
+
+**User Story**  
 As a <persona>, I want <capability>, so that <benefit>.
-**Acceptance Criteria**
-- Given ... When ... Then ...
-- Given ... When ... Then ...
-`.trim(),
-    rules: [
-      '2–4 stories for High priority epics; 1–3 for Medium; 1–2 for Low.',
-      'AC must be testable and specific (no “works”, “easy”, “fast”).',
-      'Do not mention CSV upload/import unless an epic explicitly says so.'
-    ]
-  },
 
-  'acceptance criteria': {
+**Acceptance Criteria**
+
+- **Given** <context>  
+  **When** <action>  
+  **Then** <expected result>
+
+- **Given** <context>  
+  **When** <action>  
+  **Then** <expected result>
+
+---
+
+### IMPORTANT FORMATTING RULES
+- Use Markdown headings exactly as specified (## for Epics, ### for Stories)
+- Always include a blank line between Epics and Stories
+- Acceptance Criteria MUST be bullet points using Given / When / Then
+- "Acceptance Criteria" MUST be on its own line
+- There MUST be a blank line before "**Acceptance Criteria**"
+- There MUST be a blank line after "**Acceptance Criteria**"
+- Acceptance Criteria MUST be expressed as bullet points
+- Do NOT inline Acceptance Criteria with the User Story paragraph
+- Do NOT merge multiple stories into one block
+- Do NOT include any text before the first Epic
+`,
+  rules: [
+    'Stories must be traceable to provided inputs (epics, document, or CSV).',
+    'Do not invent scope, features, or personas.',
+    'If details are missing, write conservative acceptance criteria.',
+    'Optimize for clarity, scannability, and copy/paste into Jira.'
+  ]
+},
+
+
+  acceptance_criteria: {
     source: 'either',
-    purpose: 'AC packs per epic/story, can be derived from PRD inputs or epic/story CSV.',
+    purpose: 'Acceptance criteria packs per epic/story.',
     format: `
 ## Output Format
 For each epic/story:
 - Item: <name>
-- Acceptance Criteria (Given/When/Then): 5–10 lines
-- Negative cases: 2–4 lines
+- Acceptance Criteria (Given/When/Then)
+- Negative cases
 `.trim(),
     rules: [
-      'Prefer explicit states, validations, errors, and edge cases.',
+      'Include edge cases and validation failures.'
     ]
   },
 
-  'out of scope': {
+  out_of_scope: {
     source: 'either',
-    purpose: 'Clear non-goals based on PRD inputs or epic scope.',
+    purpose: 'Clear non-goals based on scope.',
     format: `
 ## Output Format
-- 8–15 bullets
-- Grouped by theme (e.g., Permissions, Integrations, UX polish)
-- Each bullet includes: “Not in v1 because …”
+- 8–15 bullets grouped by theme
 `.trim(),
-    rules: ['No invented features—only exclude what’s implied by scope.']
+    rules: ['Do not invent exclusions.']
   },
 
-  'risks / mitigations': {
+  risks: {
     source: 'either',
-    purpose: 'Risks driven by the actual scope (PRD or epics/stories).',
+    purpose: 'Risks driven by actual scope.',
     format: `
 ## Output Format
-| Risk | Likelihood | Impact | Early Signal | Mitigation | Owner |
-|------|------------|--------|--------------|------------|-------|
+| Risk | Likelihood | Impact | Signal | Mitigation |
 `.trim(),
-    rules: ['Include at least 8 risks; make signals + mitigations concrete.']
+    rules: ['Concrete risks only.']
   },
 
-  'dependency mapping': {
+  dependencies: {
     source: 'either',
-    purpose: 'Dependencies across teams/systems based on PRD or epic/story set.',
+    purpose: 'Dependencies across teams/systems.',
     format: `
 ## Output Format
-| Item | Dependency Type | Depends On | Why | Owner | Needed By | Risk if Late |
-|------|------------------|-----------|-----|-------|----------|--------------|
+| Item | Depends On | Owner | Risk |
 `.trim(),
-    rules: ['Must include internal + external dependencies where relevant.']
+    rules: ['Include internal and external dependencies.']
   },
 
-  'success metrics / kpi drafts': {
+  kpis: {
     source: 'either',
-    purpose: 'Metrics tied to goals/epics.',
+    purpose: 'Metrics tied to goals and epics.',
     format: `
 ## Output Format
-| Metric | Definition | Source | Target | Measurement Cadence | Notes |
-|--------|------------|--------|--------|----------------------|------|
+| Metric | Definition | Target |
 `.trim(),
-    rules: ['No vanity metrics unless explicitly relevant.']
+    rules: ['No vanity metrics.']
   },
 };
-
-function normalizeOutputName(o: string): string {
-  return o.trim().toLowerCase();
-}
-
 
 
 
@@ -308,36 +380,6 @@ function isValidUUID(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-// =====================================================
-// NEW: Fetch project context documents (read-only)
-// =====================================================
-let projectContextText = '';
-
-try {
-  const { data: docs, error: docsError } = await supabase
-    .from('project_documents')
-    .select('name, extracted_text')
-    .eq('project_id', project_id)
-    .eq('status', 'active')
-    .not('extracted_text', 'is', null);
-
-  if (docsError) {
-    console.warn('⚠️ Failed to fetch project documents', docsError);
-  } else if (docs && docs.length > 0) {
-    projectContextText =
-      `\n\nPROJECT CONTEXT DOCUMENTS (REFERENCE ONLY — DO NOT INVENT SCOPE):\n` +
-      docs
-        .map(
-          (d) =>
-            `\n---\nDocument: ${d.name}\n${d.extracted_text}`
-        )
-        .join('\n');
-  }
-} catch (err) {
-  console.warn('⚠️ Project document fetch error', err);
-}
-
-
 serve(async (req) => {
   const startTime = Date.now();
   console.log('📥 [Edge Function] Received request to product-documentation');
@@ -356,6 +398,19 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
+    // 🔁 Normalize frontend payload shape
+    if (body.input) {
+      Object.assign(body, body.input);
+    }
+
+    if (body.csv?.issues && !body.jira_issues) {
+      body.jira_issues = body.csv.issues;
+    }
+
+    if (body.artifact_name && !body.input_name) {
+      body.input_name = body.artifact_name;
+    }
+
 
     // -----------------------------
 // CSV detection (supports multiple frontend keys)
@@ -377,8 +432,40 @@ const jiraCsvText =
   null;
 
 const hasCsvIssues = Array.isArray(jiraIssues) && jiraIssues.length > 0;
-const hasCsvText = typeof jiraCsvText === 'string' && jiraCsvText.trim().length > 0;
+const hasCsvText =
+  typeof jiraCsvText === 'string' &&
+  jiraCsvText.split('\n').length > 1 &&
+  jiraCsvText.includes(',');
 const hasCsvInput = hasCsvIssues || hasCsvText;
+
+// -----------------------------
+// Normalize requested outputs
+// -----------------------------
+const requestedOutputs: OutputKey[] = Array.isArray(body.selected_outputs)
+  ? body.selected_outputs.map(normalizeOutputName)
+  : [];
+
+const wantsPRD = requestedOutputs.includes('prd');
+const wantsUserStories = requestedOutputs.includes('user_stories');
+
+// CSV-only User Stories mode
+const csvOnlyUserStories =
+  hasCsvInput &&
+  requestedOutputs.length === 1 &&
+  wantsUserStories;
+
+// 🚫 Absolute rule: PRD can NEVER be generated from CSV
+if (hasCsvInput && wantsPRD) {
+  return new Response(
+    JSON.stringify({
+      error: 'Invalid output selection',
+      details:
+        'PRD generation requires manual inputs. CSV is only supported for User Stories, Acceptance Criteria, Scope, Risks, and Dependencies.',
+    }),
+    { status: 400, headers: corsHeaders }
+  );
+}
+
 
   const epics = Array.isArray(body?.epics) && body.epics.length > 0
     ? body.epics
@@ -443,6 +530,35 @@ const resolvedInputName =
   artifact_name ??
   (hasCsvInput ? 'CSV Upload' : 'Manual Input');
 
+  // =====================================================
+// NEW: Fetch project context documents (read-only)
+// =====================================================
+let projectContextText = '';
+
+try {
+  const { data: docs, error: docsError } = await supabase
+    .from('project_documents')
+    .select('name, extracted_text')
+    .eq('project_id', project_id)
+    .eq('status', 'active')
+    .not('extracted_text', 'is', null);
+
+  if (docsError) {
+    console.warn('⚠️ Failed to fetch project documents', docsError);
+  } else if (docs && docs.length > 0) {
+    projectContextText =
+      `\n\nPROJECT CONTEXT DOCUMENTS (REFERENCE ONLY — DO NOT INVENT SCOPE):\n` +
+      docs
+        .map(
+          (d) =>
+            `\n---\nDocument: ${d.name}\n${d.extracted_text}`
+        )
+        .join('\n');
+  }
+} catch (err) {
+  console.warn('⚠️ Project document fetch error', err);
+}
+
 if (isBlank(resolvedInputName)) {
   return new Response(
     JSON.stringify({
@@ -452,42 +568,7 @@ if (isBlank(resolvedInputName)) {
     { status: 400, headers: corsHeaders }
   );
 }
-
-
-
-
-const requestedOutputs = Array.isArray(selected_outputs)
-  ? selected_outputs.map(o => normalizeOutputName(o))
-  : [];
-
-const wantsPRD = requestedOutputs.includes('prd');
-const wantsUserStories = requestedOutputs.includes('user stories');
-
-
-
     
-    // ❌ Disallow PRD generation from CSV input
-    if (hasCsvInput && wantsPRD) {
-      return new Response(
-        JSON.stringify({
-          error: 'Invalid output selection',
-          details:
-            'PRD generation requires manual inputs. CSV uploads are intended for User Stories, Acceptance Criteria, Dependencies, Risks, and Scope.',
-        }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          },
-        }
-      );
-    }
-
-
-// matches "PRD"
-    const wantsUserStories = requestedOutputs.includes('user stories');
-
     // 🚨 CSV-only short-circuit (NO manual validation allowed)
       if (hasCsvInput && wantsUserStories && !wantsPRD) {
         console.log('✅ CSV-only User Stories mode — skipping manual input validation');
@@ -495,15 +576,20 @@ const wantsUserStories = requestedOutputs.includes('user stories');
 
         // 🚫 PRD requires manual input
     
-    if (wantsPRD && !hasCsvInput && isBlank(problem_statement)) {
-  return new Response(
-    JSON.stringify({
-      error: 'Missing problem statement',
-      details: 'PRD generation requires a problem statement when no CSV or epics are provided.',
-    }),
-    { status: 400, headers: corsHeaders }
-  );
-}
+    if (
+      wantsPRD &&
+      !hasCsvInput &&
+      !csvOnlyUserStories &&
+      isBlank(problem_statement)
+    ) {
+      return new Response(
+        JSON.stringify({
+          error: 'Missing problem statement',
+          details: 'PRD generation requires a problem statement.',
+        }),
+        { status: 400, headers: corsHeaders }
+      );
+    }
 
 
 
@@ -596,8 +682,16 @@ const outputsToGenerate =
   requestedOutputs.length > 0
     ? requestedOutputs
     : hasCsvInput
-      ? ['user stories']
+      ? ['user_stories']
       : ['prd'];
+
+      const includesOnlyCsvSafeOutputs =
+  requestedOutputs.length > 0 &&
+  requestedOutputs.every(o => {
+    const spec = OUTPUT_SPECS[o];
+    return spec && spec.source !== 'manual_only';
+  });
+
 
 
 userMessage += `Requested outputs:\n${outputsToGenerate.map((o) => `- ${o}`).join('\n')}\n\n`;
@@ -619,13 +713,16 @@ if (hasEpics) {
   userMessage += `\`\`\`csv\n${jiraCsvText.slice(0, 8000)}\n\`\`\`\n\n`;
 }
 
-// Manual inputs (only if present)
-userMessage += `Manual Inputs (only if present):\n`;
-if (!isBlank(problem_statement)) userMessage += `- Problem Statement: ${problem_statement}\n`;
-if (!isBlank(target_user_persona)) userMessage += `- Target User Persona: ${target_user_persona}\n`;
-if (!isBlank(business_goals)) userMessage += `- Business Goals: ${business_goals}\n`;
-if (!isBlank(functional_requirements)) userMessage += `- Functional Requirements: ${functional_requirements}\n`;
-userMessage += `\n`;
+// Manual inputs (ONLY when not CSV-only User Stories)
+if (!csvOnlyUserStories) {
+  userMessage += `Manual Inputs (only if present):\n`;
+  if (!isBlank(problem_statement)) userMessage += `- Problem Statement: ${problem_statement}\n`;
+  if (!isBlank(target_user_persona)) userMessage += `- Target User Persona: ${target_user_persona}\n`;
+  if (!isBlank(business_goals)) userMessage += `- Business Goals: ${business_goals}\n`;
+  if (!isBlank(functional_requirements)) userMessage += `- Functional Requirements: ${functional_requirements}\n`;
+  userMessage += `\n`;
+}
+
 
 // Output-by-output instructions
 userMessage += `IMPORTANT OUTPUT RULES:\n`;

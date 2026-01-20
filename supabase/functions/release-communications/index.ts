@@ -201,12 +201,13 @@ HARD OUTPUT RULES (NON-NEGOTIABLE)
 - Produce ONLY the outputs requested.
 - If more than one output is requested:
   - Return them in ONE response
-  - Separate each output with a line that contains EXACTLY:
----
+  - Wrap EACH output with explicit markers:
+    <!-- OUTPUT: <Output Name> -->
 - EACH output MUST start with a top-level markdown title that matches the output name EXACTLY:
   - "# Customer-Facing Release Notes"
   - "# Internal Release Summary"
   - "# Support Briefing"
+
 - Do not add any additional top-level title above these outputs.
 - Do not invent details. If missing, use "Assumptions / Open questions".
 
@@ -224,9 +225,20 @@ ${hasSupport ? `# Support Briefing (instructions)
 ${SUPPORT_RELEASE_PROMPT}
 ` : ''}
 
+MANDATORY OUTPUT FORMAT EXAMPLE
+
+<!-- OUTPUT: Customer-Facing Release Notes -->
+# Customer-Facing Release Notes
+<content>
+
+<!-- OUTPUT: Internal Release Summary -->
+# Internal Release Summary
+<content>
+
 REMINDER
 - Your final answer must contain ONLY the requested output(s) and must follow the title + separator rules exactly.
 `;
+
 }
 
 
@@ -356,6 +368,10 @@ serve(async (req) => {
 
     const data = await response.json();
     const output = data.choices?.[0]?.message?.content ?? '';
+    console.log('================ RAW LLM OUTPUT ================');
+    console.log(output);
+    console.log('================================================');
+
     const duration = Date.now() - startTime;
 
     // ---------------------------

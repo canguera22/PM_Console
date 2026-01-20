@@ -61,32 +61,47 @@ type OutputSection = {
   content: string;   // markdown for that section
 };
 
-function splitAgentOutputIntoSections(output: string, preferredTitles: string[] = []): OutputSection[] {
+function splitAgentOutputIntoSections(
+  output: string,
+  preferredTitles: string[] = []
+): OutputSection[] {
   if (!output || !output.trim()) return [];
 
-  const rawSections = output
-    .split(/\n\s*---\s*\n/g)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Split on H1 headers, preserving them
+  const matches = [...output.matchAll(/^#\s+.+$/gm)];
 
-  return rawSections.map((content, idx) => {
-    const firstLine = content.split('\n')[0]?.trim() ?? '';
-    const h1Match = firstLine.match(/^#\s+(.*)$/);
+  // If there are no H1s, treat entire output as one section
+  if (matches.length === 0) {
+    return [
+      {
+        id: '0',
+        title: preferredTitles[0] ?? 'Output',
+        content: output.trim(),
+      },
+    ];
+  }
 
-    // If the model gave us a usable H1, use it.
-    // Otherwise, fall back to the selected output name for that index.
-    const inferred = h1Match?.[1]?.trim();
-    const fallback = preferredTitles[idx] ?? `Section ${idx + 1}`;
+  const sections: OutputSection[] = [];
 
-    const title = inferred && inferred.length > 0 ? inferred : fallback;
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].index!;
+    const end = matches[i + 1]?.index ?? output.length;
 
-    return {
-      id: `${idx}`, // keep stable + simple
+    const block = output.slice(start, end).trim();
+    const firstLine = block.split('\n')[0];
+    const title = firstLine.replace(/^#\s+/, '').trim();
+
+    sections.push({
+      id: String(i),
       title,
-      content,
-    };
-  });
+      content: block,
+    });
+  }
+
+  return sections;
 }
+
+
 
 
 
@@ -164,7 +179,7 @@ export default function ReleaseCommunications() {
           return;
         }
 
-        const sections = splitAgentOutputIntoSections(currentOutput, selectedOutputs);
+        const sections = splitAgentOutputIntoSections(currentOutput);
         setOutputSections(sections);
         setActiveSectionId((prev) => {
           if (prev && sections.some((s) => s.id === prev)) return prev;
@@ -381,12 +396,15 @@ export default function ReleaseCommunications() {
       };
 
       const invokePayload = {
-        csv_data: csvData,
-        selected_outputs: selectedOutputs,
-        release_name: releaseName || undefined,
-        target_audience: targetAudience || undefined,
-        known_risks: knownRisks || undefined,
-      };
+      csv_data: csvData,
+      selected_outputs: selectedOutputs,
+      release_name: releaseName || undefined,
+      target_audience: targetAudience || undefined,
+      known_risks: knownRisks || undefined,
+      project_id: activeProject.id,
+      project_name: activeProject.name,
+    };
+
 
       const result = await callAgentWithLogging(
         'Release Communications',
@@ -439,7 +457,7 @@ export default function ReleaseCommunications() {
     } catch (err: any) {
       const errorMessage = parseErrorMessage(err);
       setError(errorMessage);
-      toast({ title: 'Error', description: errorMessage, variant: 'destructive', duration: 5000 });
+      toast({ title: 'Error', description: errorMessage, variant: 'destructive'});
     } finally {
       setIsGenerating(false);
     }
@@ -495,7 +513,12 @@ export default function ReleaseCommunications() {
             source_session_id: currentArtifactId,
             artifact_type: 'Customer Release Notes',
             selected_outputs: selectedOutputs,
-            context_artifacts: [],
+            context_artifacts: {
+              documentation_sessions: [],
+              meeting_sessions: [],
+              prioritization_sessions: [],
+              release_sessions: [],
+            },
           })
       );
         // Save advisor feedback onto the same artifact
@@ -514,7 +537,7 @@ await loadSessions();
     } catch (err: any) {
       const errorMessage = parseErrorMessage(err);
       setAdvisorError(errorMessage);
-      toast({ title: 'Error', description: errorMessage, variant: 'destructive', duration: 5000 });
+      toast({ title: 'Error', description: errorMessage, variant: 'destructive'});
     } finally {
       setIsRunningAdvisor(false);
     }

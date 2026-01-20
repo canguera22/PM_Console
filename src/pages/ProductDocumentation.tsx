@@ -449,7 +449,6 @@ const handleDrop = useCallback((e: React.DragEvent) => {
   );
 
   const [currentOutput, setCurrentOutput] = useState<string>(''); // keep for backward compatibility / history
-  const [currentOutputs, setCurrentOutputs] = useState<Record<string, string>>({});
   const [activeOutputName, setActiveOutputName] = useState<string>('');
 
   const [sessionHistory, setSessionHistory] = useState<DocumentationSession[]>([]);
@@ -707,26 +706,13 @@ const switchToCsvMode = () => {
       return;
     }
 
+  const normalizedOutputs = selectedOutputs;
   const basePayload = {
-  project_id: activeProject.id,
+  project_id: activeProject.id,           // 🔒 REQUIRED
   project_name: activeProject.name,
   artifact_name: formData.input_name.trim(),
   input_mode: inputMode,
-  selected_outputs: selectedOutputs.map((key) => {
-  switch (key) {
-    case OUTPUT_KEYS.PRD: return 'PRD';
-    case OUTPUT_KEYS.EPICS: return 'Epics';
-    case OUTPUT_KEYS.EPIC_IMPACT: return 'Epic Impact Statements';
-    case OUTPUT_KEYS.USER_STORIES: return 'User Stories';
-    case OUTPUT_KEYS.ACCEPTANCE_CRITERIA: return 'Acceptance Criteria';
-    case OUTPUT_KEYS.OUT_OF_SCOPE: return 'Out of Scope';
-    case OUTPUT_KEYS.RISKS: return 'Risks / Mitigations';
-    case OUTPUT_KEYS.DEPENDENCIES: return 'Dependency Mapping';
-    case OUTPUT_KEYS.KPIS: return 'Success Metrics / KPI Drafts';
-    default: return key;
-  }
-}),
-
+  selected_outputs: normalizedOutputs,    // lowercase canonical
 };
 
 const payload =
@@ -737,9 +723,6 @@ const payload =
           filename: csvFile?.name ?? null,
           row_count: parsedCsv?.rowCount ?? null,
           issues: normalizeJiraRows(parsedCsv?.rows ?? []).slice(0, 300),
-          epic_model: buildEpicStoryModel(
-            normalizeJiraRows(parsedCsv?.rows ?? [])
-          ),
         },
       }
     : {
@@ -755,6 +738,7 @@ const payload =
           success_metrics: formData.success_metrics || undefined,
         },
       };
+
 
 
 
@@ -1118,18 +1102,6 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                         );
                       })}
                   </div>
-
-                  {/* CSV guidance callout */}
-                  {inputMode === 'jira_csv' && (
-                    <div className="mt-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-3">
-                      <p className="text-xs font-medium text-[#111827]">CSV tip</p>
-                      <p className="mt-1 text-xs text-[#6B7280]">
-                        Jira CSV works best for <span className="font-medium">User Stories</span> (and also helps with Acceptance Criteria,
-                        Dependencies, Risks, and Scope). For <span className="font-medium">PRD</span> and <span className="font-medium">Epics</span>,
-                        use Manual Entry.
-                      </p>
-                    </div>
-                  )}
                 </CardContent>
               </Card>
               )
@@ -1186,8 +1158,8 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                 {/* BODY */}
                 <CardContent className="flex-1 overflow-hidden">
                   <ScrollArea className="h-full px-1">
-
                     {selectedOutputs.length === 0 ? (
+                      /* EMPTY STATE */
                       <div className="flex h-[300px] items-center justify-center border-2 border-dashed border-[#E5E7EB] rounded-lg">
                         <div className="text-center text-[#9CA3AF] px-4">
                           <p className="text-sm font-medium">Select an output</p>
@@ -1197,59 +1169,59 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                         </div>
                       </div>
                     ) : (
-                        <>
-                      {/* INPUT MODE TOGGLE */}
-                      {csvAllowed && (
-                        <div className="mb-6">
-                          <Label className="text-[13px] font-medium text-[#6B7280] mb-2 block">
-                            Source Information
-                          </Label>
+                      <>
+                        {/* INPUT MODE TOGGLE */}
+                        {csvAllowed && (
+                          <div className="mb-6">
+                            <Label className="text-[13px] font-medium text-[#6B7280] mb-2 block">
+                              Source Information
+                            </Label>
 
-                          <div className="flex rounded-lg border border-[#E5E7EB] overflow-hidden">
-                            <button
-                              type="button"
-                              onClick={switchToManualMode}
-                              className={`flex-1 px-4 py-2 text-sm font-medium ${
-                                inputMode === 'manual'
-                                  ? 'bg-[#3B82F6] text-white'
-                                  : 'bg-white text-[#374151]'
-                              }`}
-                            >
-                              Manual Entry
-                            </button>
+                            <div className="flex rounded-lg border border-[#E5E7EB] overflow-hidden">
+                              <button
+                                type="button"
+                                onClick={switchToManualMode}
+                                className={`flex-1 px-4 py-2 text-sm font-medium ${
+                                  inputMode === 'manual'
+                                    ? 'bg-[#3B82F6] text-white'
+                                    : 'bg-white text-[#374151]'
+                                }`}
+                              >
+                                Manual Entry
+                              </button>
 
-                            <button
-                              type="button"
-                              onClick={switchToCsvMode}
-                              className={`flex-1 px-4 py-2 text-sm font-medium ${
-                                inputMode === 'jira_csv'
-                                  ? 'bg-[#3B82F6] text-white'
-                                  : 'bg-white text-[#374151]'
-                              }`}
-                            >
-                              Upload CSV
-                            </button>
+                              <button
+                                type="button"
+                                onClick={switchToCsvMode}
+                                className={`flex-1 px-4 py-2 text-sm font-medium ${
+                                  inputMode === 'jira_csv'
+                                    ? 'bg-[#3B82F6] text-white'
+                                    : 'bg-white text-[#374151]'
+                                }`}
+                              >
+                                Upload CSV
+                              </button>
+                            </div>
                           </div>
+                        )}
+
+                        {/* ARTIFACT NAME */}
+                        <div className="mb-6">
+                          <Label htmlFor="input_name">
+                            Artifact Name <span className="text-red-500">*</span>
+                          </Label>
+                          <Input
+                            id="input_name"
+                            value={formData.input_name}
+                            onChange={(e) =>
+                              handleInputChange('input_name', e.target.value)
+                            }
+                          />
                         </div>
-                      )}
 
-                      {/* ARTIFACT NAME */}
-                      <div className="mb-6">
-                        <Label htmlFor="input_name">
-                          Artifact Name <span className="text-red-500">*</span>
-                        </Label>
-                        <Input
-                          id="input_name"
-                          value={formData.input_name}
-                          onChange={(e) =>
-                            handleInputChange('input_name', e.target.value)
-                          }
-                        />
-                      </div>
-
-                      {/* MANUAL MODE */}
-                      {inputMode === 'manual' && (
-                        <>
+                        {/* MANUAL MODE */}
+                        {inputMode === 'manual' && (
+                          <>
                         {activeInputSections.includes('problem') && (
                         <Collapsible defaultOpen>
                           <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
@@ -1484,85 +1456,92 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                       )}
                   </>
                   )}
-                      {/* Upload box */}
-                      <div
-                        className={`relative rounded-lg border-2 border-dashed p-6 transition-colors ${
-                          isDragging
-                            ? 'border-[#3B82F6] bg-[#3B82F6]/5'
-                            : csvError
-                            ? 'border-red-400 bg-red-50'
-                            : csvFile
-                            ? 'border-[#3B82F6] bg-[#3B82F6]/5'
-                            : 'border-[#E5E7EB] hover:border-[#D1D5DB]'
-                        }`}
-                        onDragOver={handleDragOver}
-                        onDragLeave={handleDragLeave}
-                        onDrop={handleDrop}
-                      >
-                        {!csvFile ? (
-                          <>
-                            <input
-                              type="file"
-                              accept=".csv"
-                              onChange={handleCsvFileInputChange}
-                              className="absolute inset-0 cursor-pointer opacity-0"
-                            />
-                            <div className="flex flex-col items-center justify-center text-center gap-2">
-                              <Upload className="h-10 w-10 text-[#6B7280]" />
-                              <p className="text-sm font-medium text-[#111827]">Drop CSV here</p>
-                              <p className="text-xs text-[#6B7280]">or click to browse</p>
-                            </div>
-                          </>
-                        ) : (
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <FileText className="h-5 w-5 text-[#3B82F6]" />
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium text-[#111827] truncate">{csvFile.name}</p>
-                                <p className="text-xs text-[#6B7280]">
-                                  {isParsingCsv
-                                    ? 'Parsing CSV…'
-                                    : parsedCsv
-                                    ? `${parsedCsv.rowCount} rows loaded`
-                                    : 'Ready'}
-                                </p>
+                      {/* CSV MODE */}
+                      {inputMode === 'jira_csv' && (
+                        <>
+                          {/* Upload box */}
+                          <div
+                            className={`relative rounded-lg border-2 border-dashed p-6 transition-colors ${
+                              isDragging
+                                ? 'border-[#3B82F6] bg-[#3B82F6]/5'
+                                : csvError
+                                ? 'border-red-400 bg-red-50'
+                                : csvFile
+                                ? 'border-[#3B82F6] bg-[#3B82F6]/5'
+                                : 'border-[#E5E7EB] hover:border-[#D1D5DB]'
+                            }`}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                            onDrop={handleDrop}
+                          >
+                            {!csvFile ? (
+                              <>
+                                <input
+                                  type="file"
+                                  accept=".csv"
+                                  onChange={handleCsvFileInputChange}
+                                  className="absolute inset-0 cursor-pointer opacity-0"
+                                />
+                                <div className="flex flex-col items-center justify-center text-center gap-2">
+                                  <Upload className="h-10 w-10 text-[#6B7280]" />
+                                  <p className="text-sm font-medium text-[#111827]">Drop CSV here</p>
+                                  <p className="text-xs text-[#6B7280]">or click to browse</p>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <FileText className="h-5 w-5 text-[#3B82F6]" />
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-medium text-[#111827] truncate">
+                                      {csvFile.name}
+                                    </p>
+                                    <p className="text-xs text-[#6B7280]">
+                                      {isParsingCsv
+                                        ? 'Parsing CSV…'
+                                        : parsedCsv
+                                        ? `${parsedCsv.rowCount} rows loaded`
+                                        : 'Ready'}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={clearCsvFile}
+                                  className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-800"
+                                  disabled={isParsingCsv}
+                                >
+                                  <X className="h-4 w-4" />
+                                  Remove
+                                </button>
                               </div>
-                            </div>
-
-                            {/* IMPORTANT: This button does NOT reopen file dialog */}
-                            <button
-                              type="button"
-                              onClick={clearCsvFile}
-                              className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-800"
-                              disabled={isParsingCsv}
-                            >
-                              <X className="h-4 w-4" />
-                              Remove
-                            </button>
+                            )}
                           </div>
-                        )}
-                      </div>
 
-                      {csvError && (
-                        <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3">
-                          <AlertCircle className="h-4 w-4 text-red-600 mt-0.5" />
-                          <p className="text-xs text-red-700">{csvError}</p>
-                        </div>
-                      )}
+                          {csvError && (
+                            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3">
+                              <AlertCircle className="h-4 w-4 text-red-600 mt-0.5" />
+                              <p className="text-xs text-red-700">{csvError}</p>
+                            </div>
+                          )}
 
-                      {/* Tiny preview */}
-                      {parsedCsv && parsedCsv.headers?.length > 0 && (
-                        <div className="rounded-md border border-[#E5E7EB] bg-white p-3">
-                          <p className="text-xs font-medium text-[#111827] mb-2">Detected columns</p>
-                          <p className="text-xs text-[#6B7280]">
-                            {parsedCsv.headers.slice(0, 8).join(', ')}
-                            {parsedCsv.headers.length > 8 ? '…' : ''}
-                          </p>
-                        </div>
+                          {parsedCsv && parsedCsv.headers?.length > 0 && (
+                            <div className="rounded-md border border-[#E5E7EB] bg-white p-3">
+                              <p className="text-xs font-medium text-[#111827] mb-2">
+                                Detected columns
+                              </p>
+                              <p className="text-xs text-[#6B7280]">
+                                {parsedCsv.headers.slice(0, 8).join(', ')}
+                                {parsedCsv.headers.length > 8 ? '…' : ''}
+                              </p>
+                            </div>
+                          )}
+                        </>
                       )}
                     </>
                   )}
-                  </ScrollArea>
+                </ScrollArea>
                 </CardContent>
               
 
