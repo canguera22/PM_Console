@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Copy, CheckCircle2, Loader2, Lightbulb, Upload, X, FileText, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Copy, CheckCircle2, Loader2, Lightbulb, Upload, X, FileText, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -24,7 +24,78 @@ import { ErrorDisplay } from '@/components/ErrorDisplay';
 import Papa from 'papaparse';
 import { supabase } from '@/lib/supabase';
 
+// Canonical internal output keys (DO NOT use labels for logic)
+const OUTPUT_KEYS = {
+  PRD: 'prd',
+  EPICS: 'epics',
+  EPIC_IMPACT: 'epic_impact',
+  USER_STORIES: 'user_stories',
+  ACCEPTANCE_CRITERIA: 'acceptance_criteria',
+  OUT_OF_SCOPE: 'out_of_scope',
+  RISKS: 'risks',
+  DEPENDENCIES: 'dependencies',
+  KPIS: 'kpis',
+} as const;
 
+type OutputKey = typeof OUTPUT_KEYS[keyof typeof OUTPUT_KEYS];
+
+const OUTPUT_LABEL_TO_KEY: Record<string, OutputKey> = {
+  'PRD (Product Requirements Document)': OUTPUT_KEYS.PRD,
+  'PRD': OUTPUT_KEYS.PRD,
+
+  'Epics': OUTPUT_KEYS.EPICS,
+
+  'Epic Impact Statement': OUTPUT_KEYS.EPIC_IMPACT,
+  'Epic Impact Statements': OUTPUT_KEYS.EPIC_IMPACT,
+
+  'User Stories': OUTPUT_KEYS.USER_STORIES,
+
+  'Acceptance Criteria': OUTPUT_KEYS.ACCEPTANCE_CRITERIA,
+
+  'Out of Scope': OUTPUT_KEYS.OUT_OF_SCOPE,
+
+  'Risks & Mitigations': OUTPUT_KEYS.RISKS,
+  'Risks / Mitigations': OUTPUT_KEYS.RISKS,
+
+  'Dependencies Mapping': OUTPUT_KEYS.DEPENDENCIES,
+  'Dependency Mapping': OUTPUT_KEYS.DEPENDENCIES,
+
+  'Success Metrics / KPIs Draft': OUTPUT_KEYS.KPIS,
+  'Success Metrics / KPI Drafts': OUTPUT_KEYS.KPIS,
+};
+
+function getOutputKeyFromLabel(label: string): OutputKey | null {
+  return OUTPUT_LABEL_TO_KEY[label] ?? null;
+}
+
+
+type InputSection =
+  | 'problem'
+  | 'goals'
+  | 'requirements'
+  | 'constraints'
+  | 'enhancers';
+
+const OUTPUT_TO_SECTIONS: Record<OutputKey, InputSection[]> = {
+  [OUTPUT_KEYS.PRD]: ['problem', 'goals', 'requirements', 'constraints', 'enhancers'],
+  [OUTPUT_KEYS.EPICS]: ['problem', 'goals', 'requirements'],
+  [OUTPUT_KEYS.EPIC_IMPACT]: ['problem', 'goals'],
+  [OUTPUT_KEYS.USER_STORIES]: ['requirements'],
+  [OUTPUT_KEYS.ACCEPTANCE_CRITERIA]: ['requirements'],
+  [OUTPUT_KEYS.OUT_OF_SCOPE]: ['constraints'],
+  [OUTPUT_KEYS.RISKS]: ['constraints'],
+  [OUTPUT_KEYS.DEPENDENCIES]: ['constraints'],
+  [OUTPUT_KEYS.KPIS]: ['goals'],
+};
+
+
+const SECTION_REQUIRED_FIELDS: Record<InputSection, (keyof DocumentationFormData)[]> = {
+  problem: ['problem_statement', 'target_user_persona'],
+  goals: ['business_goals'],
+  requirements: ['functional_requirements'],
+  constraints: ['assumptions_constraints', 'dependencies'],
+  enhancers: [], // always optional
+};
 
 
 // Lightweight row type for project_artifacts
@@ -355,7 +426,28 @@ const handleDrop = useCallback((e: React.DragEvent) => {
     epic_impact: '',
   });
 
-  const [selectedOutputs, setSelectedOutputs] = useState<string[]>([]);
+  const [selectedOutputs, setSelectedOutputs] = useState<OutputKey[]>([]);
+  const csvAllowed =
+  selectedOutputs.length === 1 &&
+  selectedOutputs.includes(OUTPUT_KEYS.USER_STORIES);
+
+
+  const activeInputSections = Array.from(
+    new Set(
+      selectedOutputs.flatMap(
+        (key) => OUTPUT_TO_SECTIONS[key] || []
+      )
+    )
+  );
+
+  const activeRequiredFields = Array.from(
+    new Set(
+      activeInputSections.flatMap(
+        (section) => SECTION_REQUIRED_FIELDS[section] || []
+      )
+    )
+  );
+
   const [currentOutput, setCurrentOutput] = useState<string>(''); // keep for backward compatibility / history
   const [currentOutputs, setCurrentOutputs] = useState<Record<string, string>>({});
   const [activeOutputName, setActiveOutputName] = useState<string>('');
@@ -389,9 +481,16 @@ const handleDrop = useCallback((e: React.DragEvent) => {
   // Prevent double-loading if already selected
   if (currentSessionId === artifactIdFromUrl) return;
 
-  void loadArtifactById(artifactIdFromUrl);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [artifactIdFromUrl, activeProject]);
+    void loadArtifactById(artifactIdFromUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artifactIdFromUrl, activeProject]);
+
+  useEffect(() => {
+    if (!csvAllowed && inputMode === 'jira_csv') {
+      switchToManualMode();
+    }
+  }, [csvAllowed, inputMode]);
+
 
 
   const artifactToDocumentationSession = (a: ProjectArtifactRow): DocumentationSession => {
@@ -504,9 +603,16 @@ const handleDrop = useCallback((e: React.DragEvent) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
-  const toggleOutput = (output: string) => {
-    setSelectedOutputs((prev) => (prev.includes(output) ? prev.filter((o) => o !== output) : [...prev, output]));
+  const toggleOutput = (label: string) => {
+    const key = getOutputKeyFromLabel(label);
+    if (!key) return;
+
+    setSelectedOutputs((prev) =>
+      prev.includes(key) ? prev.filter((o) => o !== key) : [...prev, key]
+    );
   };
+
+
 function parseOutputsByMarker(raw: string): Record<string, string> {
   const lines = raw.split('\n');
   const sections: Record<string, string> = {};
@@ -533,25 +639,45 @@ function parseOutputsByMarker(raw: string): Record<string, string> {
   return sections;
 }
   const isFormValid = () => {
-  // Always require artifact name + at least one output
   if (!formData.input_name.trim() || selectedOutputs.length === 0) return false;
 
   if (inputMode === 'jira_csv') {
-    // CSV mode requirements
-    return !!csvData && !csvError && !isParsingCsv;
+    return (
+      !!parsedCsv &&
+      parsedCsv.rows.length > 0 &&
+      !csvError &&
+      !isParsingCsv
+    );
   }
 
-  // Manual mode requirements
-  const requiredFields: (keyof DocumentationFormData)[] = [
-    'problem_statement',
-    'target_user_persona',
-    'business_goals',
-    'assumptions_constraints',
-    'functional_requirements',
-    'dependencies',
-  ];
+  // manual mode
+  return activeRequiredFields.every(
+    (field) => formData[field]?.trim()
+  );
+};
 
-  return requiredFields.every((field) => (formData[field] ?? '').trim() !== '');
+const switchToManualMode = () => {
+  // Switch mode
+  setInputMode('manual');
+
+  // 🔥 Clear CSV-related state
+  resetCsvState();
+};
+
+const switchToCsvMode = () => {
+  // Switch mode
+  setInputMode('jira_csv');
+
+  // 🔥 Clear manual-only required fields
+  setFormData((prev) => ({
+    ...prev,
+    problem_statement: '',
+    target_user_persona: '',
+    business_goals: '',
+    assumptions_constraints: '',
+    functional_requirements: '',
+    dependencies: '',
+  }));
 };
 
 
@@ -581,41 +707,64 @@ function parseOutputsByMarker(raw: string): Record<string, string> {
       return;
     }
 
-  const payload = {
-    project_id: activeProject.id,
-    project_name: activeProject.name,
-    input_mode: inputMode,
-    selected_outputs: selectedOutputs,
-    artifact_name: formData.input_name.trim(),
-    ...formData,
-    ...(inputMode === 'jira_csv'
-  ? (() => {
-      const rawRows = parsedCsv?.rows ?? [];
-      const normalizedIssues = normalizeJiraRows(rawRows);
-      const epicStoryModel = buildEpicStoryModel(normalizedIssues);
+  const basePayload = {
+  project_id: activeProject.id,
+  project_name: activeProject.name,
+  artifact_name: formData.input_name.trim(),
+  input_mode: inputMode,
+  selected_outputs: selectedOutputs.map((key) => {
+  switch (key) {
+    case OUTPUT_KEYS.PRD: return 'PRD';
+    case OUTPUT_KEYS.EPICS: return 'Epics';
+    case OUTPUT_KEYS.EPIC_IMPACT: return 'Epic Impact Statements';
+    case OUTPUT_KEYS.USER_STORIES: return 'User Stories';
+    case OUTPUT_KEYS.ACCEPTANCE_CRITERIA: return 'Acceptance Criteria';
+    case OUTPUT_KEYS.OUT_OF_SCOPE: return 'Out of Scope';
+    case OUTPUT_KEYS.RISKS: return 'Risks / Mitigations';
+    case OUTPUT_KEYS.DEPENDENCIES: return 'Dependency Mapping';
+    case OUTPUT_KEYS.KPIS: return 'Success Metrics / KPI Drafts';
+    default: return key;
+  }
+}),
 
-      console.log('🧩 normalizedIssues sample:', normalizedIssues.slice(0, 5));
-      console.log('🧩 epicStoryModel:', epicStoryModel);
+};
 
-      return {
-        csv_filename: csvFile?.name ?? null,
-        csv_row_count: parsedCsv?.rowCount ?? null,
-        jira_issues_normalized: normalizedIssues.slice(0, 300),
-        epic_story_model: epicStoryModel,
+const payload =
+  inputMode === 'jira_csv'
+    ? {
+        ...basePayload,
+        csv: {
+          filename: csvFile?.name ?? null,
+          row_count: parsedCsv?.rowCount ?? null,
+          issues: normalizeJiraRows(parsedCsv?.rows ?? []).slice(0, 300),
+          epic_model: buildEpicStoryModel(
+            normalizeJiraRows(parsedCsv?.rows ?? [])
+          ),
+        },
+      }
+    : {
+        ...basePayload,
+        input: {
+          problem_statement: formData.problem_statement,
+          target_user_persona: formData.target_user_persona,
+          business_goals: formData.business_goals,
+          assumptions_constraints: formData.assumptions_constraints,
+          functional_requirements: formData.functional_requirements,
+          dependencies: formData.dependencies,
+          non_functional_requirements: formData.non_functional_requirements || undefined,
+          success_metrics: formData.success_metrics || undefined,
+        },
       };
-    })()
-  : {}),
-  };
+
 
 
     console.log('🚀 [DocGen Payload] keys:', Object.keys(payload));
-    console.log('🚀 [DocGen Payload] csv:', {
+    console.log('🚀 [DocGen Payload]', {
       input_mode: payload.input_mode,
-      csv_data_len: (payload as any).csv_data?.length ?? 0,
-      jira_csv_text_len: (payload as any).jira_csv_text?.length ?? 0,
-      jira_issues_rows: Array.isArray((payload as any).jira_issues) ? (payload as any).jira_issues.length : 'not-array',
-      parsedCsv_rows: Array.isArray((payload as any).parsedCsv) ? (payload as any).parsedCsv.length : 'not-array',
+      has_csv: !!(payload as any).csv,
+      csv_rows: (payload as any).csv?.issues?.length ?? 0,
     });
+
 
     setIsGenerating(true);
     console.log('👤 [User Action] Clicked "Generate Documentation" button');
@@ -632,57 +781,27 @@ const hasCsvInputFrontend =
 
 console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
 
-const cleanedPayload = {
-  project_id: payload.project_id,
-  project_name: payload.project_name,
-  artifact_name: payload.artifact_name,
-  input_mode: payload.input_mode,
-  selected_outputs: payload.selected_outputs,
-
-  input: {
-    problem_statement: payload.problem_statement,
-    target_user_persona: payload.target_user_persona,
-    business_goals: payload.business_goals,
-    assumptions_constraints: payload.assumptions_constraints,
-    functional_requirements: payload.functional_requirements,
-    dependencies: payload.dependencies,
-
-    // optional
-    non_functional_requirements: payload.non_functional_requirements || undefined,
-    success_metrics: payload.success_metrics || undefined,
-  },
-
-  csv: inputMode === 'jira_csv'
-    ? {
-        filename: csvFile?.name,
-        row_count: parsedCsv?.rowCount,
-        issues: payload.jira_issues_normalized,
-        epic_model: payload.epic_story_model,
-      }
-    : undefined,
-};
-
     try {
       const result = await callAgentWithLogging(
         'Product Documentation',
         'product-documentation',
         payload,
         async () => {
-          const { data, error } = await supabase.functions.invoke('product-documentation', {
-            body: payload,
-          });
+          const { data, error } = await supabase.functions.invoke(
+            'product-documentation',
+            { body: payload }
+          );
+
           if (error) throw error;
           return data;
         }
       );
 
-      setCurrentOutput(result.output);
+      console.log('✨ [Success] Received AI-generated documentation', {
+        outputLength: result.output.length,
+      });
 
-
-      console.log('✨ [Success] Received AI-generated documentation', { outputLength: result.output.length });
-
-      // Save to project_artifacts (canonical store)
-      console.log('💾 [Database] Saving to project_artifacts table...');
+      // Save to project_artifacts
       const artifactName = formData.input_name.trim();
 
       const saved = await supabaseFetch<ProjectArtifactRow[]>('/project_artifacts', {
@@ -692,27 +811,30 @@ const cleanedPayload = {
           project_name: activeProject.name,
           artifact_type: 'product_documentation',
           artifact_name: artifactName,
-          input_data: {
-              input_name: formData.input_name,
-              ...formData,
-              selected_outputs: selectedOutputs,
-              input_mode: inputMode,
-
-              csv_filename: inputMode === 'jira_csv' ? csvFile?.name ?? null : null,
-              csv_row_count: inputMode === 'jira_csv' ? parsedCsv?.rowCount ?? null : null,
-            },
-
+          input_data:
+            inputMode === 'jira_csv'
+              ? {
+                  input_name: formData.input_name,
+                  input_mode: 'jira_csv',
+                  selected_outputs: selectedOutputs,
+                  csv: {
+                    filename: csvFile?.name ?? null,
+                    row_count: parsedCsv?.rowCount ?? null,
+                  },
+                }
+              : {
+                  input_name: formData.input_name,
+                  input_mode: 'manual',
+                  selected_outputs: selectedOutputs,
+                  input: { ...formData },
+                },
           output_data: result.output,
-          metadata: {
-            module_type: 'product_documentation',
-          },
+          metadata: { module_type: 'product_documentation' },
           status: 'active',
         }),
       });
 
-      console.log('💾 [Database] Saved successfully');
-
-      // TEMP: until backend returns per-output blocks
+      // Sync outputs
       setCurrentOutput(result.output);
 
       const parsed = parseOutputsByMarker(result.output);
@@ -724,16 +846,15 @@ const cleanedPayload = {
       setOutputByType(sheetMap);
       setActiveOutputSheet(Object.keys(sheetMap)[0] || '');
 
-      setAdvisorOutput(''); // reset advisor for the new artifact
+      setAdvisorOutput('');
 
-      if (saved && saved.length > 0) {
-        setCurrentSessionId(saved[0].id); // artifact UUID
-      } else {
-        setCurrentSessionId(null);
+      if (saved?.length) {
+        setCurrentSessionId(saved[0].id);
       }
 
       toast.success('Documentation generated successfully!');
       await loadSessionHistory();
+
     } catch (err: any) {
       console.error('💥 [Error Handler] Caught error:', err);
       const errorMessage = parseErrorMessage(err);
@@ -848,6 +969,16 @@ const cleanedPayload = {
     }
   };
 
+  const [isOutputsCollapsed, setIsOutputsCollapsed] = useState(false);
+  const [isInputsCollapsed, setIsInputsCollapsed] = useState(false);
+  const gridTemplateColumns = `
+  ${isOutputsCollapsed ? '56px' : '300px'}
+  ${isInputsCollapsed ? '56px' : '360px'}
+  1fr
+`;
+
+
+
   const loadSession = (session: DocumentationSession) => {
     setFormData({
       input_name: session.input_name,
@@ -891,26 +1022,11 @@ const cleanedPayload = {
     toast.success('Session loaded');
   };
 
-const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
-  'PRD': { badge: 'Manual', note: 'Best from manual inputs (not CSV).' },
-  'Epics': { badge: 'Manual', note: 'Best from manual inputs (not CSV).' },
-  'Epic Impact Statements': { badge: 'Manual + CSV', note: 'Works from either manual inputs or epic CSV.' },
-  'User Stories': { badge: 'CSV best', note: 'Best from Epic CSV (or Epics input).' },
-  'Acceptance Criteria': { badge: 'Manual + CSV', note: 'Works from either; best if epics/stories exist.' },
-  'Out of Scope': { badge: 'Manual + CSV' },
-  'Risks / Mitigations': { badge: 'Manual + CSV' },
-  'Dependency Mapping': { badge: 'Manual + CSV' },
-  'Success Metrics / KPI Drafts': { badge: 'Manual + CSV' },
-  // If this exists in OUTPUT_TYPES, we’ll filter it out in the UI below:
-  'Release Notes Draft': { badge: 'Use Release Notes module' },
-};
-
 
   return (
     <div className="min-h-screen bg-[#F9FAFB]">
       {/* Header */}
       <div className="border-b border-[#E5E7EB] bg-white shadow-sm">
-        <div className="container mx-auto px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <Button
@@ -929,76 +1045,212 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
               </div>
             </div>
           </div>
-        </div>
       </div>
 
       {/* Main Content */}
-      <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Left Panel - Input Form */}
-          <div className="lg:col-span-4">
-              <ErrorDisplay error={error} onDismiss={() => setError(null)} />
+        <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+          <div
+            className="grid gap-6"
+            style={{ gridTemplateColumns }}
+          >
 
-              <Card>
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg font-semibold text-[#111827]">Product Information</CardTitle>
-                <CardDescription className="text-sm text-[#6B7280]">
-                  Fill in the details about your product. Fields marked with * are required.
-                </CardDescription>
-              </CardHeader>
+          {/* Column 1 - Output Selection */}
+            <div className="h-[calc(100vh-180px)]">
+              {isOutputsCollapsed ? (
+                <div className="h-full flex flex-col items-center pt-3 border rounded-xl bg-muted/30">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setIsOutputsCollapsed(false)}
+                  >
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                  <span
+                      className="mt-2 text-xs"
+                      style={{ writingMode: 'vertical-rl' }}
+                    >
+                      What to Generate
+                    </span>
+                </div>
+              ) : (
+                <Card className="h-full">
+                  <CardHeader className="flex flex-row items-center justify-between pb-3">
+                    <CardTitle className="text-base">Outputs</CardTitle>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setIsOutputsCollapsed(true)}
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="h-[calc(100%-56px)] overflow-hidden">
+                  <div className="space-y-3">
+                    {OUTPUT_TYPES
+                      .filter((o) => o !== 'Release Notes Draft') 
+                      .map((output) => {
+                        return (
+                          <div
+                            key={output}
+                            className="rounded-lg border border-[#E5E7EB] p-3 transition-colors hover:bg-[#F9FAFB]"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start space-x-3">
+                                <Checkbox
+                                  id={output}
+                                  checked={(() => {
+                                    const key = getOutputKeyFromLabel(output);
+                                    return key ? selectedOutputs.includes(key) : false;
+                                  })()}
+                                  onCheckedChange={() => toggleOutput(output)}
+                                />
+                                <div>
+                                  <Label
+                                    htmlFor={output}
+                                    className="cursor-pointer text-sm font-medium leading-tight text-[#111827]"
+                                  >
+                                    {output}
+                                  </Label>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
 
-              <CardContent>
-                <ScrollArea className="h-[calc(100vh-300px)]">
-                  <div className="space-y-4 pr-4">
+                  {/* CSV guidance callout */}
+                  {inputMode === 'jira_csv' && (
+                    <div className="mt-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-3">
+                      <p className="text-xs font-medium text-[#111827]">CSV tip</p>
+                      <p className="mt-1 text-xs text-[#6B7280]">
+                        Jira CSV works best for <span className="font-medium">User Stories</span> (and also helps with Acceptance Criteria,
+                        Dependencies, Risks, and Scope). For <span className="font-medium">PRD</span> and <span className="font-medium">Epics</span>,
+                        use Manual Entry.
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+              )
+            }
+           </div>
 
-                    {/* Input Mode Toggle */}
-                    <div className="mb-6">
-                      <Label className="text-[13px] font-medium text-[#6B7280] mb-2 block">
-                        Input Source
-                      </Label>
+          {/* Column 2 - Input Form */}
+          <div className="h-[calc(100vh-180px)]">
+            {isInputsCollapsed ? (
+              /* =========================
+                COLLAPSED STATE
+                ========================= */
+              <div className="h-full flex flex-col items-center pt-3 border rounded-xl bg-muted/30">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsInputsCollapsed(false)}
+                >
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
 
-                      <div className="flex rounded-lg border border-[#E5E7EB] overflow-hidden">
-                        <button
-                          type="button"
-                          onClick={() => setInputMode('manual')}
-                          className={`flex-1 px-4 py-2 text-sm font-medium ${
-                            inputMode === 'manual'
-                              ? 'bg-[#3B82F6] text-white'
-                              : 'bg-white text-[#374151]'
-                          }`}
-                        >
-                          Manual Entry
-                        </button>
+                <span
+                  className="mt-2 text-xs"
+                  style={{ writingMode: 'vertical-rl' }}
+                >
+                  Inputs
+                </span>
+              </div>
+            ) : (
+              /* =========================
+                EXPANDED STATE
+                ========================= */
+              <Card className="h-full flex flex-col">
+                {/* HEADER */}
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <div>
+                    <CardTitle className="text-base">
+                      Product Information
+                    </CardTitle>
+                    <CardDescription className="text-sm text-[#6B7280]">
+                      Fill in the details about your product. Fields marked with * are required.
+                    </CardDescription>
+                  </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setInputMode('jira_csv')}
-                          className={`flex-1 px-4 py-2 text-sm font-medium ${
-                            inputMode === 'jira_csv'
-                              ? 'bg-[#3B82F6] text-white'
-                              : 'bg-white text-[#374151]'
-                          }`}
-                        >
-                          Upload Jira CSV
-                        </button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setIsInputsCollapsed(true)}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                </CardHeader>
+
+                {/* BODY */}
+                <CardContent className="flex-1 overflow-hidden">
+                  <ScrollArea className="h-full px-1">
+
+                    {selectedOutputs.length === 0 ? (
+                      <div className="flex h-[300px] items-center justify-center border-2 border-dashed border-[#E5E7EB] rounded-lg">
+                        <div className="text-center text-[#9CA3AF] px-4">
+                          <p className="text-sm font-medium">Select an output</p>
+                          <p className="mt-1 text-xs">
+                            Inputs will appear here once you choose what to generate.
+                          </p>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                        <>
+                      {/* INPUT MODE TOGGLE */}
+                      {csvAllowed && (
+                        <div className="mb-6">
+                          <Label className="text-[13px] font-medium text-[#6B7280] mb-2 block">
+                            Source Information
+                          </Label>
 
-                    {/* Artifact Name */}
-                    <div className="mb-6">
-                      <Label htmlFor="input_name">
-                        Artifact Name <span className="text-red-500">*</span>
-                      </Label>
-                      <Input
-                        id="input_name"
-                        value={formData.input_name}
-                        onChange={(e) => handleInputChange('input_name', e.target.value)}
-                      />
-                    </div>
+                          <div className="flex rounded-lg border border-[#E5E7EB] overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={switchToManualMode}
+                              className={`flex-1 px-4 py-2 text-sm font-medium ${
+                                inputMode === 'manual'
+                                  ? 'bg-[#3B82F6] text-white'
+                                  : 'bg-white text-[#374151]'
+                              }`}
+                            >
+                              Manual Entry
+                            </button>
 
-                    {/* MANUAL MODE */}
-                    {inputMode === 'manual' && (
-                      <>
+                            <button
+                              type="button"
+                              onClick={switchToCsvMode}
+                              className={`flex-1 px-4 py-2 text-sm font-medium ${
+                                inputMode === 'jira_csv'
+                                  ? 'bg-[#3B82F6] text-white'
+                                  : 'bg-white text-[#374151]'
+                              }`}
+                            >
+                              Upload CSV
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ARTIFACT NAME */}
+                      <div className="mb-6">
+                        <Label htmlFor="input_name">
+                          Artifact Name <span className="text-red-500">*</span>
+                        </Label>
+                        <Input
+                          id="input_name"
+                          value={formData.input_name}
+                          onChange={(e) =>
+                            handleInputChange('input_name', e.target.value)
+                          }
+                        />
+                      </div>
+
+                      {/* MANUAL MODE */}
+                      {inputMode === 'manual' && (
+                        <>
+                        {activeInputSections.includes('problem') && (
                         <Collapsible defaultOpen>
                           <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
                             Problem Definition
@@ -1042,12 +1294,14 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
                             placeholder="What specific pain points or jobs to be done?"
                             className="mt-1.5"
                             rows={3}
-                          />
-                        </div>
-                      </CollapsibleContent>
-                    </Collapsible>
+                            />
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                          )}
                     {/* Section 2: Goals & Context */}
-                    <Collapsible defaultOpen>
+                    {activeInputSections.includes('goals') && (
+                     <Collapsible defaultOpen>
                       <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
                         Goals & Context
                       </CollapsibleTrigger>
@@ -1093,8 +1347,10 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
                         </div>
                       </CollapsibleContent>
                     </Collapsible>
+                    )}
 
                     {/* Section 3: Requirements */}
+                    {activeInputSections.includes('requirements') && (
                     <Collapsible defaultOpen>
                       <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
                         Requirements
@@ -1128,8 +1384,10 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
                         </div>
                       </CollapsibleContent>
                     </Collapsible>
+                    )}
 
                     {/* Section 4: Constraints & Dependencies */}
+                    {activeInputSections.includes('constraints') && (
                     <Collapsible defaultOpen>
                       <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
                         Constraints & Dependencies
@@ -1176,55 +1434,56 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
                         </div>
                       </CollapsibleContent>
                     </Collapsible>
+                        )}
 
                     {/* Section 5: Optional Enhancers */}
-                    <Collapsible>
-                      <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
-                        Optional Enhancers
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="mt-3 space-y-4">
-                        <div>
-                          <Label htmlFor="target_timeline" className="text-[13px] font-medium text-[#6B7280]">
-                            Target Release Timeline
-                          </Label>
-                          <Input
-                            id="target_timeline"
-                            value={formData.target_timeline}
-                            onChange={(e) => handleInputChange('target_timeline', e.target.value)}
-                            placeholder="e.g., Q2 2024"
-                            className="mt-1.5"
-                          />
-                        </div>
+                    {activeInputSections.includes('enhancers') && (
+                      <Collapsible>
+                        <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg bg-[#F9F4FB] p-3 text-left font-semibold text-[#111827] hover:bg-[#F3F4F6] transition-colors">
+                          Optional Enhancers
+                        </CollapsibleTrigger>
 
-                        <div>
-                          <Label htmlFor="epic_impact" className="text-[13px] font-medium text-[#6B7280]">
-                            Epic Impact Statement
-                          </Label>
-                          <Textarea
-                            id="epic_impact"
-                            value={formData.epic_impact}
-                            onChange={(e) => handleInputChange('epic_impact', e.target.value)}
-                            placeholder="High-level impact statement for this epic"
-                            className="mt-1.5"
-                            rows={3}
-                          />
-                        </div>
-                      </CollapsibleContent>
-                    </Collapsible>
-                    </>
-                    )}
-
-                  {/* CSV MODE — MUST BE SIBLING, NOT NESTED */}
-                  {inputMode === 'jira_csv' && (
-                  <Card className="border-dashed">
-                    <CardContent className="py-6 space-y-4">
-                      <div className="space-y-2">
-                        <p className="text-sm font-medium text-[#111827]">Upload Jira CSV</p>
-                        <p className="text-xs text-[#6B7280]">
-                          Upload a Jira CSV export. We’ll parse it and use it as the input source for documentation generation.
-                        </p>
-                      </div>
-
+                        <CollapsibleContent className="mt-3 space-y-4">
+                          <div>
+                            <Label
+                              htmlFor="target_timeline"
+                              className="text-[13px] font-medium text-[#6B7280]"
+                            >
+                              Target Release Timeline
+                            </Label>
+                            <Input
+                              id="target_timeline"
+                              value={formData.target_timeline}
+                              onChange={(e) =>
+                                handleInputChange('target_timeline', e.target.value)
+                              }
+                              placeholder="e.g., Q2 2024"
+                              className="mt-1.5"
+                            />
+                          </div>
+                          <div>
+                            <Label
+                              htmlFor="epic_impact"
+                              className="text-[13px] font-medium text-[#6B7280]"
+                            >
+                              Epic Impact Statement
+                            </Label>
+                            <Textarea
+                              id="epic_impact"
+                              value={formData.epic_impact}
+                              onChange={(e) =>
+                                handleInputChange('epic_impact', e.target.value)
+                              }
+                              placeholder="High-level impact statement for this epic"
+                              className="mt-1.5"
+                              rows={3}
+                            />
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                      )}
+                  </>
+                  )}
                       {/* Upload box */}
                       <div
                         className={`relative rounded-lg border-2 border-dashed p-6 transition-colors ${
@@ -1301,123 +1560,44 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
                           </p>
                         </div>
                       )}
-                    </CardContent>
-                  </Card>
-                )}
+                    </>
+                  )}
+                  </ScrollArea>
+                </CardContent>
+              
 
-
-                </div>
-              </ScrollArea>
-            </CardContent>
-          </Card>
-          </div>
-          {/* Middle Panel - Output Selection */}
-            <div className="lg:col-span-3">
-              <Card>
-                <CardHeader className="pb-4">
-                  <CardTitle className="text-lg font-semibold text-[#111827]">Select Outputs to Generate</CardTitle>
-                  <CardDescription className="text-sm text-[#6B7280]">Choose at least one output type</CardDescription>
-                </CardHeader>
-
-                <CardContent>
-                  <div className="space-y-3">
-                    {OUTPUT_TYPES
-                      .filter((o) => o !== 'Release Notes Draft') // ✅ remove this output in this module
-                      .map((output) => {
-                        const meta = OUTPUT_UI[output] || {};
-                        return (
-                          <div
-                            key={output}
-                            className="rounded-lg border border-[#E5E7EB] p-3 transition-colors hover:bg-[#F9FAFB]"
+                  {/* Sticky footer */}
+                        <div className="border-t border-[#E5E7EB] p-4">
+                          <Button
+                            className="w-full"
+                            size="lg"
+                            onClick={handleGenerate}
+                            disabled={!isFormValid() || isGenerating}
                           >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex items-start space-x-3">
-                                <Checkbox
-                                  id={output}
-                                  checked={selectedOutputs.includes(output)}
-                                  onCheckedChange={() => toggleOutput(output)}
-                                />
-                                <div>
-                                  <Label
-                                    htmlFor={output}
-                                    className="cursor-pointer text-sm font-medium leading-tight text-[#111827]"
-                                  >
-                                    {output}
-                                  </Label>
-                                  {meta.note && <p className="mt-1 text-xs text-[#6B7280]">{meta.note}</p>}
-                                </div>
-                              </div>
+                            {isGenerating ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Generating…
+                              </>
+                            ) : (
+                              'Generate Documentation'
+                            )}
+                          </Button>
 
-                              {meta.badge && (
-                                <Badge variant="secondary" className="text-[11px] whitespace-nowrap">
-                                  {meta.badge}
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
+                          {!isFormValid() && (
+                            <p className="mt-2 text-center text-xs text-[#9CA3AF]">
+                              {selectedOutputs.length === 0
+                                ? 'Select at least one output'
+                                : 'Complete required inputs'}
+                            </p>
+                          )}
+                        </div>
+                      </Card>
+                    )}
                   </div>
 
-                  {/* CSV guidance callout */}
-                  {inputMode === 'jira_csv' && (
-                    <div className="mt-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-3">
-                      <p className="text-xs font-medium text-[#111827]">CSV tip</p>
-                      <p className="mt-1 text-xs text-[#6B7280]">
-                        Jira CSV works best for <span className="font-medium">User Stories</span> (and also helps with Acceptance Criteria,
-                        Dependencies, Risks, and Scope). For <span className="font-medium">PRD</span> and <span className="font-medium">Epics</span>,
-                        use Manual Entry.
-                      </p>
-                    </div>
-                  )}
-
-                  <Separator className="my-6 bg-[#E5E7EB]" />
-
-                  <Button className="w-full" size="lg" onClick={handleGenerate} disabled={!isFormValid() || isGenerating}>
-                    {isGenerating ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Generating your documentation...
-                      </>
-                    ) : (
-                      'Generate Documentation'
-                    )}
-                  </Button>
-
-                  <Button
-                    variant="outline"
-                    className="w-full mt-3"
-                    size="lg"
-                    onClick={handleRunAdvisorReview}
-                    disabled={(!currentOutput && Object.keys(outputByType).length === 0) || isRunningAdvisor}
-                  >
-                    {isRunningAdvisor ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Running PM Advisor Review...
-                      </>
-                    ) : (
-                      <>
-                        <Lightbulb className="mr-2 h-4 w-4" />
-                        Run PM Advisor Review
-                      </>
-                    )}
-                  </Button>
-
-                  {advisorError && <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />}
-
-                  {!isFormValid() && (
-                    <p className="mt-2 text-center text-xs text-[#9CA3AF]">
-                      {selectedOutputs.length === 0 ? 'Select at least one output type' : 'Fill in all required fields'}
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-
-
-          {/* Right Panel - Results Display */}
-          <div className="lg:col-span-5">
+          {/* Column 3 - Results Display */}
+          <div className="h-[calc(100vh-180px)]">
             <Card className="h-[calc(100vh-180px)]">
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-3">
@@ -1649,7 +1829,7 @@ const OUTPUT_UI: Record<string, { note?: string; badge?: string }> = {
             </Card>
           </div>
         </div>
+        </div>
       </div>
-    </div>
   );
 }
