@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
-import { ArrowLeft, Loader2, Copy, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, Copy, CheckCircle2 } from 'lucide-react';
 import { analyzeMeeting } from '@/lib/agent';
 import { supabaseFetch } from '@/lib/supabase';
 import { MeetingSession, MEETING_TYPES, ProjectArtifactRow } from '@/types/meeting';
@@ -42,6 +42,14 @@ export default function MeetingIntelligence() {
   const [sessions, setSessions] = useState<MeetingSession[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [copiedToClipboard, setCopiedToClipboard] = useState(false);
+
+  // Column collapse state
+  const [isInputsCollapsed, setIsInputsCollapsed] = useState(false);
+
+  const gridTemplateColumns = `
+    ${isInputsCollapsed ? '56px' : '360px'}
+    1fr
+  `;
 
   // Error state
   const [error, setError] = useState<string | null>(null);
@@ -171,6 +179,7 @@ export default function MeetingIntelligence() {
           meeting_transcript: transcript,
           meeting_type: meetingType || undefined,
           participants: participants || undefined,
+          persist_artifact: true,
         },
         () =>
           analyzeMeeting({
@@ -192,26 +201,6 @@ export default function MeetingIntelligence() {
           : 'Meeting: Analysis';
 
       console.log('💾 [Database] Saving to project_artifacts table...');
-      await supabaseFetch<ProjectArtifactRow[]>('/project_artifacts', {
-        method: 'POST',
-        body: JSON.stringify({
-          project_id: activeProject.id,
-          project_name: effectiveProjectName,
-          artifact_type: 'meeting_intelligence',
-          artifact_name: artifactName,
-          input_data: {
-            meeting_transcript: transcript,
-            meeting_type: meetingType || null,
-            participants: participants || null,
-          },
-          output_data: result.output,
-          metadata: {
-            source: 'meeting-intelligence-ui',
-          },
-          status: 'active',
-        }),
-      });
-
       console.log('💾 [Database] Saved successfully');
 
       await loadSessions();
@@ -293,102 +282,140 @@ export default function MeetingIntelligence() {
       </div>
 
       {/* Main Content */}
-      <div className="container mx-auto grid gap-6 px-4 py-8 sm:px-6 lg:grid-cols-2 lg:px-8">
-        {/* Left Panel - Input Form */}
-        <div className="space-y-6">
-          <ErrorDisplay error={error} onDismiss={() => setError(null)} />
-
-          <Card>
-            <CardHeader className="pb-4">
-              <div className="flex items-start justify-between">
-                <div>
-                  <CardTitle className="text-lg font-semibold text-[#111827]">Meeting Input</CardTitle>
-                  <CardDescription className="mt-1.5 text-sm text-[#6B7280]">
-                    Paste your meeting transcript and provide optional context
-                  </CardDescription>
-                </div>
-                <SampleTranscriptDialog onLoadSample={handleLoadSample} />
-              </div>
-            </CardHeader>
-
-            <CardContent className="space-y-5">
-              <div className="space-y-2">
-                <Label htmlFor="transcript" className="text-[13px] font-medium text-[#6B7280]">
-                  Meeting Transcript <span className="text-[#EF4444]">*</span>
-                </Label>
-                <Textarea
-                  id="transcript"
-                  placeholder="Paste your meeting notes or transcript here..."
-                  value={transcript}
-                  onChange={(e) => setTranscript(e.target.value)}
-                  className="min-h-[300px] font-mono text-sm"
-                />
-              </div>
-
-              <Separator className="bg-[#E5E7EB]" />
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="meeting-type" className="text-[13px] font-medium text-[#6B7280]">
-                    Meeting Type
-                  </Label>
-                  <Select value={meetingType} onValueChange={setMeetingType}>
-                    <SelectTrigger id="meeting-type">
-                      <SelectValue placeholder="Select type..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {MEETING_TYPES.map((type) => (
-                        <SelectItem key={type} value={type}>
-                          {type}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="project-name" className="text-[13px] font-medium text-[#6B7280]">
-                    Project Name (optional override)
-                  </Label>
-                  <Input
-                    id="project-name"
-                    placeholder={`Default: ${activeProject?.name ?? 'Select a project'}`}
-                    value={projectName}
-                    onChange={(e) => setProjectName(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="participants" className="text-[13px] font-medium text-[#6B7280]">
-                  Participants
-                </Label>
-                <Input
-                  id="participants"
-                  placeholder="e.g., John, Sarah, Mike"
-                  value={participants}
-                  onChange={(e) => setParticipants(e.target.value)}
-                />
-              </div>
-
+      <div
+        className="container mx-auto grid gap-6 px-4 py-8 sm:px-6 lg:px-8"
+        style={{ gridTemplateColumns }}
+      >
+        {/* Column 1 – Inputs */}
+        <div className="h-[calc(100vh-180px)]">
+          {isInputsCollapsed ? (
+            /* COLLAPSED STATE */
+            <div
+              className="h-full flex flex-col items-center justify-start
+                        pt-3 border rounded-xl bg-muted/30
+                        overflow-hidden flex-shrink-0"
+              style={{ width: '56px' }}
+            >
               <Button
-                onClick={handleAnalyze}
-                disabled={isAnalyzing || !transcript.trim()}
-                className="w-full"
-                size="lg"
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsInputsCollapsed(false)}
               >
-                {isAnalyzing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Analyzing your meeting...
-                  </>
-                ) : (
-                  'Analyze Meeting'
-                )}
+                <ArrowRight className="h-4 w-4" />
               </Button>
-            </CardContent>
-          </Card>
-        </div>
+
+              <span
+                className="mt-2 text-xs text-muted-foreground"
+                style={{ writingMode: 'vertical-rl' }}
+              >
+                Inputs
+              </span>
+            </div>
+          ) : (
+            /* EXPANDED STATE */
+            <div className="space-y-6 h-full overflow-hidden">
+              <ErrorDisplay error={error} onDismiss={() => setError(null)} />
+
+              <Card className="h-full flex flex-col">
+                <CardHeader className="flex flex-row items-center justify-between pb-4">
+                  <div>
+                    <CardTitle className="text-lg font-semibold text-[#111827]">
+                      Meeting Transcript
+                    </CardTitle>
+                    <CardDescription className="mt-1.5 text-sm text-[#6B7280]">
+                      Paste your meeting transcript and provide optional context
+                    </CardDescription>
+                  </div>
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setIsInputsCollapsed(true)}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                </CardHeader>
+
+                  <CardContent className="flex-1 overflow-auto space-y-5">
+                    <div className="space-y-2">
+                      <Label htmlFor="transcript" className="text-[13px] font-medium text-[#6B7280]">
+                        Meeting Transcript <span className="text-[#EF4444]">*</span>
+                      </Label>
+                      <Textarea
+                        id="transcript"
+                        placeholder="Paste your meeting notes or transcript here..."
+                        value={transcript}
+                        onChange={(e) => setTranscript(e.target.value)}
+                        className="min-h-[300px] font-mono text-sm"
+                      />
+                    </div>
+
+                    <Separator className="bg-[#E5E7EB]" />
+
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="meeting-type" className="text-[13px] font-medium text-[#6B7280]">
+                          Meeting Type
+                        </Label>
+                        <Select value={meetingType} onValueChange={setMeetingType}>
+                          <SelectTrigger id="meeting-type">
+                            <SelectValue placeholder="Select type..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {MEETING_TYPES.map((type) => (
+                              <SelectItem key={type} value={type}>
+                                {type}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="project-name" className="text-[13px] font-medium text-[#6B7280]">
+                          Document Name
+                        </Label>
+                        <Input
+                          id="project-name"
+                          placeholder={`Default: ${activeProject?.name ?? 'Select a project'}`}
+                          value={projectName}
+                          onChange={(e) => setProjectName(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="participants" className="text-[13px] font-medium text-[#6B7280]">
+                        Participants
+                      </Label>
+                      <Input
+                        id="participants"
+                        placeholder="e.g., John, Sarah, Mike"
+                        value={participants}
+                        onChange={(e) => setParticipants(e.target.value)}
+                      />
+                    </div>
+
+                    <Button
+                      onClick={handleAnalyze}
+                      disabled={isAnalyzing || !transcript.trim()}
+                      className="w-full"
+                      size="lg"
+                    >
+                      {isAnalyzing ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Analyzing your meeting...
+                        </>
+                      ) : (
+                        'Analyze Meeting'
+                      )}
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+              )}
+            </div>
 
         {/* Right Panel - Output Display */}
         <div className="space-y-6">

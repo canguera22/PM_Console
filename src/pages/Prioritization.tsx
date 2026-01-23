@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { useToast } from '@/hooks/use-toast';
-import { ArrowLeft, Loader2, Copy, CheckCircle2, Upload, X, Download, Info, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, Copy, CheckCircle2, Upload, X, Download, Info, Plus, Trash2 } from 'lucide-react';
 import { calculateWSJF } from '@/lib/prioritization-agent';
 import { supabaseFetch } from '@/lib/supabase';
 import { ProjectArtifact } from '@/types/project-artifacts';
@@ -72,6 +72,15 @@ export default function Prioritization() {
   const [initiativeName, setInitiativeName] = useState('');
   const [defaultEffortScale, setDefaultEffortScale] = useState('');
   const [notesContext, setNotesContext] = useState('');
+
+  // Column collapse state (match Doc / Release / Meeting)
+  const [isInputsCollapsed, setIsInputsCollapsed] = useState(false);
+  const [isConfigCollapsed, setIsConfigCollapsed] = useState(false);
+  const gridTemplateColumns = `
+    ${isInputsCollapsed ? '56px' : '360px'}
+    ${isConfigCollapsed ? '56px' : '360px'}
+    1fr
+  `;
   
   // WSJF Configuration State
   const [effortFieldName, setEffortFieldName] = useState('Job Size');
@@ -658,22 +667,51 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
       </div>
 
       {/* Main Content - Three Column Layout */}
-      <div className="container mx-auto grid gap-6 px-4 py-6 sm:px-6 lg:grid-cols-3 lg:px-8">
-        {/* Left Panel - CSV Upload & Inputs */}
-        <div className="space-y-6 lg:col-span-1">
-          {/* Error Display */}
-          <ErrorDisplay error={error} onDismiss={() => setError(null)} />
-          
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                CSV Upload & Inputs
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-xs" side="right">
+        <div
+          className="container mx-auto grid gap-6 px-4 py-6 sm:px-6 lg:px-8"
+          style={{ gridTemplateColumns }}
+        >
+        {/* Column 1 – CSV Upload & Inputs */}
+        <div className="h-[calc(100vh-180px)]">
+          {isInputsCollapsed ? (
+            /* COLLAPSED */
+            <div
+              className="h-full flex flex-col items-center justify-start
+                        pt-3 border rounded-xl bg-muted/30
+                        overflow-hidden flex-shrink-0"
+              style={{ width: '56px' }}
+            >
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsInputsCollapsed(false)}
+              >
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+
+              <span
+                className="mt-2 text-xs"
+                style={{ writingMode: 'vertical-rl' }}
+              >
+                Inputs
+              </span>
+            </div>
+          ) : (
+            /* EXPANDED */
+            <div className="space-y-6 h-full overflow-hidden">
+              <ErrorDisplay error={error} onDismiss={() => setError(null)} />
+
+              <Card className="h-full flex flex-col">
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      CSV Upload & Inputs
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs" side="right">
                       <div className="space-y-2 text-sm">
                         <p className="font-semibold">Required CSV columns:</p>
                         <ul className="list-disc list-inside space-y-1 text-xs">
@@ -692,15 +730,25 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                           <li>Owner / Team</li>
                         </ul>
                       </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </CardTitle>
-              <CardDescription>
-                Upload your backlog CSV and provide optional context
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
+                   </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </CardTitle>
+            <CardDescription>
+              Upload your backlog CSV and provide optional context
+            </CardDescription>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsInputsCollapsed(true)}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        </CardHeader>
+
+        <CardContent className="flex-1 overflow-auto space-y-4">
               {/* CSV Upload Area */}
               <div className="space-y-2">
                 <Label htmlFor="csv-upload" className="text-[13px] font-medium text-[#6B7280]">Upload Backlog CSV</Label>
@@ -805,17 +853,55 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
             </CardContent>
           </Card>
         </div>
+          )}
+          </div>
 
-        {/* Center Panel - Model Selection & Configuration */}
-        <div className="space-y-6 lg:col-span-1">
-          <Card>
-            <CardHeader>
-              <CardTitle>Prioritization Model & Configuration</CardTitle>
-              <CardDescription>
-                Select a prioritization model and configure its parameters
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
+        {/* Column 2 – Model Configuration */}
+        <div className="h-[calc(100vh-180px)]">
+          {isConfigCollapsed ? (
+            /* COLLAPSED */
+            <div
+              className="h-full flex flex-col items-center justify-start
+                        pt-3 border rounded-xl bg-muted/30
+                        overflow-hidden flex-shrink-0"
+              style={{ width: '56px' }}
+            >
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsConfigCollapsed(false)}
+              >
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+
+              <span
+                className="mt-2 text-xs"
+                style={{ writingMode: 'vertical-rl' }}
+              >
+                Configurations
+              </span>
+            </div>
+          ) : (
+            /* EXPANDED */
+            <Card className="h-full flex flex-col">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Prioritization Model & Configuration</CardTitle>
+                  <CardDescription>
+                    Select a prioritization model and configure its parameters
+                  </CardDescription>
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsConfigCollapsed(true)}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+              </CardHeader>
+
+              <CardContent className="flex-1 overflow-auto space-y-6">
               {/* Model Selection */}
               <div className="space-y-2">
                 <Label htmlFor="model-select" className="text-[13px] font-medium text-[#6B7280]">Prioritization Model</Label>
@@ -1409,9 +1495,10 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
               </div>
             </CardContent>
           </Card>
+          )}
         </div>
 
-        {/* Right Panel - Prioritization Results */}
+        {/* Column 3 - Prioritization Results */}
         <div className="space-y-6 lg:col-span-1">
           <Card className="lg:sticky lg:top-6">
             <CardHeader>

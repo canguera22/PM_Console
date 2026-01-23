@@ -357,20 +357,6 @@ const handleDocumentUpload = async (file: File) => {
     setUploadingDoc(false);
   }
 
-  let extractedText = null;
-let metadata = null;
-
-try {
-  const result = await extractTextFromFile(file);
-  extractedText = result.text;
-  metadata = result.metadata;
-} catch (err) {
-  console.warn('⚠️ Text extraction failed', err);
-}
-
-};
-
-
   const openArtifactById = async (artifactId: string) => {
   if (!activeProject) return;
 
@@ -813,4 +799,5 @@ function ArtifactDetailModal({ artifact, config, onClose }: {
       </div>
     </div>
   );
-}
+}}
+

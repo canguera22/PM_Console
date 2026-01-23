@@ -64,6 +64,7 @@ You:
 - Write in clean, scannable markdown
 - Avoid referencing internal systems unless explicitly instructed
 - Do not invent features or capabilities not supported by the input
+- Output sections MUST appear in the same order as selected_outputs.
 `.trim();
 
 // ---------- Customer-Facing ----------
@@ -83,8 +84,8 @@ STYLE GUIDANCE
 - Vary sentence structure to avoid repetitive patterns
 
 OPENING CONTEXT
-- Begin the release notes with a short, one-sentence summary directly under the title
-- This sentence should briefly describe the overall focus of the release (e.g., security, performance, usability)
+- Begin the release notes with a short, 2-3 sentence summary of the changes being implemented in the release
+- This sentence should briefly describe the overall focus of the release citing specifics (e.g., security, performance, usability)
 - Keep it concise and neutral (no marketing language)
 
 OBJECTIVE
@@ -126,11 +127,15 @@ NON-NEGOTIABLE RULES
 - Do not invent details. If information is missing, place it under "Assumptions / open questions".
 
 REQUIRED OUTPUT FORMAT (Markdown)
-# Internal Release Notes — <Release Name> (<Fix Version/s>)
+# Internal Release Notes
 
 ## Executive summary
 - 5–8 bullets max.
 - Focus on what shipped + why it matters + who is impacted.
+
+## Release context
+- Release name: <name if known>
+- Fix version(s): <if present in CSV>
 
 ## What’s in this release
 - 1–2 short paragraphs.
@@ -180,66 +185,236 @@ GUIDELINES
 - Emphasize "what changed" from the customer’s perspective
 `.trim();
 
+// --------Technical Release Notes-----------
+const TECHNICAL_RELEASE_PROMPT = `
+${BASE_RELEASE_PROMPT}
+
+AUDIENCE
+- Engineers, QA, SRE, platform teams
+
+OBJECTIVE
+Provide a technically-oriented release summary focused on implementation details, risks, and operational considerations.
+
+REQUIRED OUTPUT FORMAT (Markdown)
+
+# Technical / Engineering Notes
+
+## Overview
+- 1–2 paragraphs summarizing the technical scope of the release.
+
+## Key technical changes
+- Bullet list of significant code, infrastructure, or configuration changes.
+
+## Risks & mitigations
+- Known technical risks
+- Rollback considerations
+
+## Operational notes
+- Monitoring
+- Feature flags
+- Migrations
+`.trim();
+
+
+// ---------Cetegorized Issue Breakdown ----------
+const CATEGORIZED_ISSUE_BREAKDOWN_PROMPT = `
+${BASE_RELEASE_PROMPT}
+
+AUDIENCE
+- Product Managers
+- QA
+- Stakeholders needing detailed release coverage
+
+OBJECTIVE
+Produce a categorized breakdown of all work included in the release.
+This is a STRUCTURED inventory, not a narrative summary.
+
+REQUIRED OUTPUT FORMAT (Markdown)
+
+# Categorized Issue Breakdown
+
+## Summary
+- 1 short paragraph explaining what this breakdown represents and how to use it.
+
+## Categories
+Group all included issues into logical categories.
+Use categories such as (but not limited to):
+- Features
+- Enhancements
+- Bug fixes
+- Performance
+- Security
+- Infrastructure / DevOps
+- UX / UI
+- Technical debt
+
+For EACH category:
+
+### <Category name>
+- Bullet list of issues.
+- Each bullet should include:
+  - Issue key (if available)
+  - Short description
+  - Impacted area or component (if available)
+
+## Notes
+- If issue metadata is incomplete, group conservatively.
+- Do not invent categories or issues not present in the input.
+- If an issue fits multiple categories, choose the MOST relevant one.
+
+STYLE GUIDANCE
+- Be concise
+- Optimize for scanability
+- Avoid narrative prose
+`.trim();
+
+
+// ---------- Breaking Changes ----------
+const BREAKING_CHANGES_PROMPT = `
+${BASE_RELEASE_PROMPT}
+
+AUDIENCE
+- Product
+- Engineering
+- Support
+- Customer Success
+- Leadership
+
+OBJECTIVE
+Identify and clearly communicate any breaking changes, risks, or noteworthy behavioral changes introduced by this release.
+
+REQUIRED OUTPUT FORMAT (Markdown)
+
+# Breaking Changes / Risk Alerts
+
+## Overview
+- 1–2 sentences explaining the purpose of this section.
+
+## Breaking changes
+List ONLY if applicable.
+For EACH breaking change include:
+- **What changed**
+- **Who is affected**
+- **When it matters**
+- **What action is required** (if any)
+
+If there are no breaking changes, explicitly state:
+> No breaking changes were identified in this release.
+
+## Risk alerts
+Call out high-risk or sensitive changes even if they are not technically breaking.
+Examples:
+- Behavior changes
+- Deprecations
+- Performance tradeoffs
+- Feature flag removals
+- Security-related changes
+
+For EACH risk include:
+- **Risk description**
+- **Likelihood** (low / medium / high)
+- **Potential impact**
+- **Mitigation or monitoring guidance**
+
+## Support & comms notes
+- Anything Support or CS should proactively know or communicate.
+
+STYLE GUIDANCE
+- Be explicit and conservative
+- Do not downplay risks
+- Avoid vague language
+`.trim();
+
+
+// ---------- Release Checklist ----------
+const RELEASE_CHECKLIST_PROMPT = `
+${BASE_RELEASE_PROMPT}
+
+AUDIENCE
+- Product Managers
+- Release Managers
+- Engineering Leads
+
+OBJECTIVE
+Generate a practical release checklist to validate readiness before and after deploying this release.
+
+REQUIRED OUTPUT FORMAT (Markdown)
+
+# Release Checklist
+
+## Pre-release
+Checklist items to confirm BEFORE deployment.
+Use checkbox format:
+- [ ] Code freeze complete
+- [ ] QA validation complete
+- [ ] Feature flags reviewed
+- [ ] Rollback plan defined
+- [ ] Monitoring dashboards prepared
+- [ ] Stakeholders notified
+
+Tailor checklist items to the actual contents of the release when possible.
+
+## Deployment
+Checklist items DURING deployment:
+- [ ] Deployment started
+- [ ] No blocking errors observed
+- [ ] Critical paths verified
+- [ ] Feature flags toggled as planned
+
+## Post-release
+Checklist items AFTER deployment:
+- [ ] Metrics reviewed
+- [ ] Error rates stable
+- [ ] Support briefed
+- [ ] Release notes distributed
+- [ ] Follow-ups logged (if needed)
+
+## Notes
+- Include any release-specific checks inferred from the CSV.
+- Do not invent requirements unsupported by the inputs.
+
+STYLE GUIDANCE
+- Keep items actionable
+- Avoid generic filler
+- Prefer operational realism over completeness
+`.trim();
+
+
 // =====================================================
 // PROMPT SELECTION
 // =====================================================
 function buildSystemPrompt(selectedOutputs: string[]): string {
-  const outputs = Array.isArray(selectedOutputs) ? selectedOutputs : [];
+  if (!selectedOutputs.length) {
+    throw new Error('At least one output type must be selected');
+  }
 
-  // IMPORTANT: these strings must match what your UI sends in selected_outputs
-  const hasCustomer = outputs.includes('Customer-Facing Release Notes');
-  const hasInternal = outputs.includes('Internal Release Summary'); // ✅ match UI
-  const hasSupport = outputs.includes('Support Briefing');
-
-  // Fallback
-  const normalized = outputs.length ? outputs : ['Customer-Facing Release Notes'];
+  const hasCustomer = selectedOutputs.includes('Customer-Facing Release Notes');
+  const hasInternal = selectedOutputs.includes('Internal Release Summary');
+  const hasSupport = selectedOutputs.includes('Support Briefing');
+  const hasTechnical = selectedOutputs.includes('Technical / Engineering Notes');
+  const hasCategorized = selectedOutputs.includes('Categorized Issue Breakdown');
+  const hasBreaking = selectedOutputs.includes('Breaking Changes / Risk Alerts');
+  const hasChecklist = selectedOutputs.includes('Release Checklist');
 
   return `
-You are a Release Communications Analyst responsible for transforming issue tracker exports into clear, structured release documentation.
-
 HARD OUTPUT RULES (NON-NEGOTIABLE)
-- Produce ONLY the outputs requested.
-- If more than one output is requested:
-  - Return them in ONE response
-  - Wrap EACH output with explicit markers:
-    <!-- OUTPUT: <Output Name> -->
-- EACH output MUST start with a top-level markdown title that matches the output name EXACTLY:
-  - "# Customer-Facing Release Notes"
-  - "# Internal Release Summary"
-  - "# Support Briefing"
+- Produce ONLY the outputs explicitly requested
+- EACH output MUST start with a top-level markdown header (#)
+- Header text MUST exactly match the output name
+- Do NOT include any output that was not requested
+- Do NOT include HTML comments or separators
+- Do NOT include explanatory text outside the outputs
 
-- Do not add any additional top-level title above these outputs.
-- Do not invent details. If missing, use "Assumptions / Open questions".
-
-OUTPUT DEFINITIONS
-
-${hasCustomer ? `# Customer-Facing Release Notes (instructions)
-${CUSTOMER_RELEASE_PROMPT}
-` : ''}
-
-${hasInternal ? `# Internal Release Summary (instructions)
-${INTERNAL_RELEASE_PROMPT}
-` : ''}
-
-${hasSupport ? `# Support Briefing (instructions)
-${SUPPORT_RELEASE_PROMPT}
-` : ''}
-
-MANDATORY OUTPUT FORMAT EXAMPLE
-
-<!-- OUTPUT: Customer-Facing Release Notes -->
-# Customer-Facing Release Notes
-<content>
-
-<!-- OUTPUT: Internal Release Summary -->
-# Internal Release Summary
-<content>
-
-REMINDER
-- Your final answer must contain ONLY the requested output(s) and must follow the title + separator rules exactly.
+${hasCustomer ? CUSTOMER_RELEASE_PROMPT : ''}
+${hasInternal ? INTERNAL_RELEASE_PROMPT : ''}
+${hasSupport ? SUPPORT_RELEASE_PROMPT : ''}
+${hasTechnical ? TECHNICAL_RELEASE_PROMPT : ''}
+${hasCategorized ? CATEGORIZED_ISSUE_BREAKDOWN_PROMPT : ''}
+${hasBreaking ? BREAKING_CHANGES_PROMPT : ''}
+${hasChecklist ? RELEASE_CHECKLIST_PROMPT : ''}
 `;
-
 }
+
 
 
 // =====================================================
@@ -366,8 +541,15 @@ serve(async (req) => {
       throw new Error(err.error?.message || 'OpenAI request failed');
     }
 
+    function sanitizeAgentOutput(output: string): string {
+      return output.replace(/<!--[\s\S]*?-->/g, '').trim();
+    }
+
+
     const data = await response.json();
-    const output = data.choices?.[0]?.message?.content ?? '';
+    const rawOutput = data.choices?.[0]?.message?.content ?? '';
+    const output = sanitizeAgentOutput(rawOutput);
+
     console.log('================ RAW LLM OUTPUT ================');
     console.log(output);
     console.log('================================================');

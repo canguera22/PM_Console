@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useToast } from '@/hooks/use-toast';
 import {
   ArrowLeft,
+  ArrowRight,
   Loader2,
   Copy,
   CheckCircle2,
@@ -145,6 +146,27 @@ export default function ReleaseCommunications() {
   const [sessions, setSessions] = useState<ProjectArtifact[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [copiedToClipboard, setCopiedToClipboard] = useState(false);
+
+  // Editing state (mirrors Product Documentation)
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
+  const [editableOutput, setEditableOutput] = useState('');
+  type EditViewMode = 'edit' | 'preview';
+  const [editViewMode, setEditViewMode] = useState<EditViewMode>('edit');
+
+  
+  // Canonical versioning (matches Product Documentation)
+  const [currentArtifactVersion, setCurrentArtifactVersion] = useState<number>(1);
+  const [lastModifiedBy, setLastModifiedBy] = useState<'agent' | 'user'>('agent');
+
+  // Column collapse state 
+  const [isOutputsCollapsed, setIsOutputsCollapsed] = useState(false);
+  const [isInputsCollapsed, setIsInputsCollapsed] = useState(false);
+  const gridTemplateColumns = `
+    ${isInputsCollapsed ? '56px' : '360px'}
+    ${isOutputsCollapsed ? '56px' : '300px'}
+    1fr
+  `;
+
 
   // PM Advisor state
   const [advisorOutput, setAdvisorOutput] = useState<string>('');
@@ -436,7 +458,10 @@ export default function ReleaseCommunications() {
         artifact_name: artifactName,
         input_data: inputData,
         output_data: result.output,
-        metadata: {},
+        metadata: {
+          version_number: 1,
+          last_modified_by: 'agent',
+        },
         status: 'active',
         advisor_feedback: null,
         advisor_reviewed_at: null,
@@ -462,6 +487,7 @@ export default function ReleaseCommunications() {
       setIsGenerating(false);
     }
   };
+  
 
   const handleRunAdvisorReview = async () => {
     setAdvisorError(null);
@@ -543,6 +569,54 @@ await loadSessions();
     }
   };
 
+  const handleSaveEdits = async () => {
+    if (!currentArtifactId || !activeProject || !editingSectionId) {
+      toast({ title: 'Error', description: 'No active section to save', variant: 'destructive' });
+      return;
+    }
+
+    // Rebuild full document from sections
+    const updatedSections = outputSections.map((s) =>
+      s.id === editingSectionId ? { ...s, content: editableOutput } : s
+    );
+
+    const rebuiltOutput = updatedSections.map((s) => s.content).join('\n\n');
+
+    try {
+      const nextVersion = currentArtifactVersion + 1;
+
+      await supabaseFetch(`/project_artifacts?id=eq.${currentArtifactId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          output_data: rebuiltOutput,
+          metadata: {
+            version_number: nextVersion,
+            last_modified_by: 'user',
+            last_modified_at: new Date().toISOString(),
+          },
+        }),
+      });
+
+      // ✅ Sync UI immediately
+      setCurrentArtifactVersion(nextVersion);
+      setLastModifiedBy('user');
+
+
+      // Sync local state 
+      setOutputSections(updatedSections);
+      setCurrentOutput(rebuiltOutput);
+      setEditingSectionId(null);
+      setEditViewMode('edit');
+
+      toast({ title: 'Saved', description: 'Edits saved successfully' });
+      await loadSessions();
+    } catch (err) {
+      console.error('Save failed:', err);
+      toast({ title: 'Error', description: 'Failed to save edits', variant: 'destructive' });
+    }
+  };
+
+  
   const handleCopyToClipboard = async () => {
   if (!currentOutput) return;
 
@@ -561,21 +635,22 @@ await loadSessions();
 
 
     const loadSession = (session: ProjectArtifact) => {
-  setError(null);
-  setAdvisorError(null);
+      setCurrentArtifactId(session.id);
+      setCurrentOutput(session.output_data ?? null);
+      setAdvisorOutput(session.advisor_feedback ?? '');
 
-  setCurrentArtifactId(session.id);
-  setCurrentOutput(session.output_data ?? null);
+      const input = session.input_data || {};
+      setReleaseName(input.release_name ?? '');
+      setTargetAudience(input.target_audience ?? '');
+      setKnownRisks(input.known_risks ?? '');
+      setSelectedOutputs(coerceSelectedOutputs(input.selected_outputs));
 
-  // 🔑 LOAD advisor feedback if it exists
-  setAdvisorOutput(session.advisor_feedback ?? '');
+      // ✅ VERSIONING (SOURCE OF TRUTH = metadata)
+      const metadata = session.metadata ?? {};
+      setCurrentArtifactVersion(metadata.version_number ?? 1);
+      setLastModifiedBy(metadata.last_modified_by ?? 'agent');
+    };
 
-  const input = session.input_data || {};
-  setReleaseName(input.release_name ?? '');
-  setTargetAudience(input.target_audience ?? '');
-  setKnownRisks(input.known_risks ?? '');
-  setSelectedOutputs(coerceSelectedOutputs(input.selected_outputs));
-};
 
 
 
@@ -620,14 +695,62 @@ await loadSessions();
       </div>
 
       {/* Main Content */}
-      <div className="container mx-auto grid gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[2fr_1.5fr_2fr] lg:px-8">
-        {/* Left Panel */}
-        <div className="space-y-6">
-          <ErrorDisplay error={error} onDismiss={() => setError(null)} />
-          <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />
+      <div
+        className="container mx-auto grid gap-6 px-4 py-6 sm:px-6 lg:px-8"
+        style={{ gridTemplateColumns }}
+        >
+        {/* Column 1 Inputs */}
+        <div className="h-[calc(100vh-180px)]">
+  {isInputsCollapsed ? (
+    /* COLLAPSED STATE */
+    <div
+      className="h-full flex flex-col items-center justify-start
+                pt-3 border rounded-xl bg-muted/30
+                overflow-hidden"
+      style={{ width: '56px' }}
+    >
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setIsInputsCollapsed(false)}
+      >
+        <ArrowRight className="h-4 w-4" />
+      </Button>
 
-          <Card>
-            <CardHeader>
+      <span
+        className="mt-2 text-xs"
+        style={{ writingMode: 'vertical-rl' }}
+      >
+        Inputs
+      </span>
+    </div>
+  ) : (
+    /* EXPANDED STATE */
+    <div className="space-y-6 h-full overflow-hidden">
+      <ErrorDisplay error={error} onDismiss={() => setError(null)} />
+      <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />
+
+      <Card className="h-full flex flex-col">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="text-lg font-semibold text-[#111827]">
+              CSV & Release Inputs
+            </CardTitle>
+            <CardDescription>
+              Upload Jira data and add contextual information
+            </CardDescription>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsInputsCollapsed(true)}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        </CardHeader>
+
+            <div className="px-6 pt-2">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
@@ -658,7 +781,7 @@ await loadSessions();
                   <CardDescription>Upload Jira CSV export</CardDescription>
                 </div>
               </div>
-            </CardHeader>
+            </div>
 
             <CardContent className="space-y-4">
               <div
@@ -777,15 +900,55 @@ await loadSessions();
             </CardContent>
           </Card>
         </div>
+  )}
+  </div>
 
-        {/* Middle Panel */}
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold text-[#111827]">Select Documentation Types</CardTitle>
-              <CardDescription>Choose one or more output formats</CardDescription>
+        {/* Column 2 – Outputs */}
+      <div className="h-[calc(100vh-180px)]">
+        {isOutputsCollapsed ? (
+            <div
+              className="h-full flex flex-col items-center justify-start
+                        pt-3 border rounded-xl bg-muted/30
+                        overflow-hidden flex-shrink-0"
+              style={{ width: '56px' }}
+            >
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsOutputsCollapsed(false)}
+            >
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+
+            <span
+              className="mt-2 text-xs"
+              style={{ writingMode: 'vertical-rl' }}
+            >
+              Outputs
+            </span>
+          </div>
+        ) : (
+          <Card className="h-full flex flex-col">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-lg font-semibold text-[#111827]">
+                  Outputs
+                </CardTitle>
+                <CardDescription>
+                  Select documentation types and generate
+                </CardDescription>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsOutputsCollapsed(true)}
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
             </CardHeader>
-            <CardContent className="space-y-4">
+
+            <CardContent className="flex-1 overflow-auto space-y-4">
               <div className="space-y-3">
                 {OUTPUT_TYPES.map((output) => (
                   <div
@@ -844,13 +1007,25 @@ await loadSessions();
               </Button>
             </CardContent>
           </Card>
+        )}
         </div>
 
-        {/* Right Panel */}
+        {/* Column 3 Output */}
         <div className="space-y-6">
           <Card className="lg:sticky lg:top-6">
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold text-[#111827]">Release Documentation</CardTitle>
+            <CardHeader className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <CardTitle className="text-lg font-semibold text-[#111827]">
+                  Release Documentation
+                </CardTitle>
+
+                <Badge
+                  variant="secondary"
+                  className="h-6 px-2 text-xs flex items-center"
+                >
+                  v{currentArtifactVersion} · {lastModifiedBy === 'user' ? 'Edited' : 'Generated'}
+                </Badge>
+              </div>
             </CardHeader>
             <CardContent>
               <Tabs defaultValue="current" className="w-full">
@@ -863,21 +1038,6 @@ await loadSessions();
                 <TabsContent value="current" className="mt-4 space-y-4">
                   {currentOutput ? (
                     <>
-                      <div className="flex justify-end">
-                        <Button variant="outline" size="sm" onClick={handleCopyToClipboard} className="gap-2">
-                          {copiedToClipboard ? (
-                            <>
-                              <CheckCircle2 className="h-4 w-4" />
-                              Copied!
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="h-4 w-4" />
-                              Copy to Clipboard
-                            </>
-                          )}
-                        </Button>
-                      </div>
 
                       {/* If we have multiple sections (Customer/Internal/Support), show section tabs */}
                       {outputSections.length > 1 ? (
@@ -894,8 +1054,21 @@ await loadSessions();
                                   <TabsTrigger
                                     key={sec.id}
                                     value={sec.id}
-                                    className="whitespace-nowrap"
                                     title={sec.title}
+                                    className={`
+                                      whitespace-nowrap
+                                      px-3 py-1.5
+                                      rounded-md
+                                      border
+                                      data-[state=active]:bg-blue-600
+                                      data-[state=active]:text-white
+                                      data-[state=active]:border-blue-600
+                                      data-[state=active]:shadow-sm
+                                      data-[state=inactive]:bg-white
+                                      data-[state=inactive]:text-blue-600
+                                      data-[state=inactive]:border-blue-200
+                                      hover:bg-blue-50
+                                    `}
                                   >
                                     {sec.title}
                                   </TabsTrigger>
@@ -905,9 +1078,89 @@ await loadSessions();
 
                             {outputSections.map((sec) => (
                               <TabsContent key={sec.id} value={sec.id} className="mt-3">
-                                <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
-                                  <ReactMarkdown>{sec.content}</ReactMarkdown>
+                                <div className="space-y-3">
+                                  {/* Action row */}
+                                  <div className="flex justify-end gap-2">
+                                    {editingSectionId !== sec.id ? (
+                                      <>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => {
+                                            setEditableOutput(sec.content);
+                                            setEditingSectionId(sec.id);
+                                            setEditViewMode('edit');
+                                          }}
+                                        >
+                                          Edit
+                                        </Button>
+
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => navigator.clipboard.writeText(sec.content)}
+                                        >
+                                          <Copy className="mr-2 h-4 w-4" />
+                                          Copy to Clipboard
+                                        </Button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        {/* Edit / Preview toggle */}
+                                        <div className="flex items-center gap-2 mr-auto">
+                                          <Button
+                                            size="sm"
+                                            variant={editViewMode === 'edit' ? 'default' : 'outline'}
+                                            onClick={() => setEditViewMode('edit')}
+                                          >
+                                            Edit
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant={editViewMode === 'preview' ? 'default' : 'outline'}
+                                            onClick={() => setEditViewMode('preview')}
+                                          >
+                                            Preview
+                                          </Button>
+                                        </div>
+
+                                        <Button size="sm" onClick={handleSaveEdits}>
+                                          Save
+                                        </Button>
+
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => {
+                                            setEditingSectionId(null);
+                                            setEditableOutput('');
+                                            setEditViewMode('edit');
+                                          }}
+                                        >
+                                          Cancel
+                                        </Button>
+                                      </>
+                                    )}
+                                  </div>
+
+                                  {/* Content */}
+                                  <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
+                                    {editingSectionId === sec.id ? (
+                                      editViewMode === 'edit' ? (
+                                        <Textarea
+                                          value={editableOutput}
+                                          onChange={(e) => setEditableOutput(e.target.value)}
+                                          className="min-h-[400px] w-full font-mono text-sm"
+                                        />
+                                      ) : (
+                                        <ReactMarkdown>{editableOutput}</ReactMarkdown>
+                                      )
+                                    ) : (
+                                      <ReactMarkdown>{sec.content}</ReactMarkdown>
+                                    )}
+                                  </div>
                                 </div>
+
                               </TabsContent>
                             ))}
                           </Tabs>
@@ -959,6 +1212,9 @@ await loadSessions();
                           onClick={() => {
                             loadSession(s);
                             setSearchParams({ artifact: s.id });
+                            setEditingSectionId(null);
+                            setEditableOutput('');
+                            setEditViewMode('edit');
                           }}
                         >
                           <CardContent className="p-4">

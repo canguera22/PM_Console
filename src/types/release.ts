@@ -14,6 +14,7 @@ export interface ReleaseSession {
 export const OUTPUT_TYPES = [
   'Customer-Facing Release Notes',
   'Internal Release Summary',
+  'Support Briefing',
   'Technical / Engineering Notes',
   'Categorized Issue Breakdown',
   'Breaking Changes / Risk Alerts',

@@ -16,34 +16,10 @@ function isValidUUID(uuid: string): boolean {
 // =====================================================
 // NEW: Fetch project context documents
 // =====================================================
-let projectContextText = '';
-
-try {
-  const { data: docs, error: docsError } = await supabase
-    .from('project_documents')
-    .select('name, extracted_text')
-    .eq('project_id', project_id)
-    .eq('status', 'active')
-    .not('extracted_text', 'is', null);
-
-  if (docsError) {
-    console.warn('⚠️ Failed to fetch project documents', docsError);
-  } else if (docs && docs.length > 0) {
-    projectContextText =
-      `\n\nPROJECT CONTEXT DOCUMENTS (for reference only):\n` +
-      docs
-        .map(
-          (d) =>
-            `\n---\nDocument: ${d.name}\n${d.extracted_text}`
-        )
-        .join('\n');
-  }
-} catch (err) {
-  console.warn('⚠️ Project document fetch error', err);
-}
 
 
-const SYSTEM_PROMPT = `You are a Meeting Intelligence Analyst specializing in extracting actionable insights from meeting transcripts.
+
+const SYSTEM_PROMPT = `You are a Meeting Intelligence Analyst specializing in extracting actionable insights from meeting transcripts and are responsible for validating decisions against known constraints.
 
 Your role:
 - Extract key decisions, action items, and next steps
@@ -51,6 +27,8 @@ Your role:
 - Create executive summaries
 - Flag risks, blockers, and dependencies
 - Organize information clearly
+- Explicitly distinguish between proposed decisions and validated decisions
+
 
 When analyzing meetings, you can generate:
 - Executive Summary: High-level overview for stakeholders
@@ -58,6 +36,24 @@ When analyzing meetings, you can generate:
 - Decisions Log: Key decisions made
 - Follow-up Items: Topics requiring further discussion
 - Meeting Notes: Comprehensive notes
+
+SOURCE AUTHORITY RULES
+
+- Meeting transcripts reflect discussion and decisions made with incomplete information.
+- Uploaded context documents are considered factual and authoritative.
+- If a meeting decision conflicts with authoritative context:
+  - You MUST call out the conflict explicitly.
+  - You MUST NOT treat the meeting decision as final.
+  - You MUST recommend a revised decision based on the authoritative information.
+
+REQUIRED OUTPUT SECTION
+
+## Conflicts With Authoritative Context
+- If conflicts exist, list and explain them
+- If NO conflicts exist, explicitly state: "No conflicts identified"
+- This section must always be present
+
+
 
 Format output in markdown with clear sections and bullet points.`;
 
@@ -111,6 +107,27 @@ serve(async (req) => {
         },
       );
     }
+
+    let projectContextText = '';
+
+      const { data: docs, error: docsError } = await supabase
+        .from('project_documents')
+        .select('name, extracted_text')
+        .eq('project_id', project_id)
+        .eq('status', 'active')
+        .not('extracted_text', 'is', null);
+
+      if (!docsError && docs && docs.length > 0) {
+        projectContextText =
+          `\n\nAUTHORITATIVE PROJECT CONTEXT:\n` +
+          docs
+            .map(
+              (d) =>
+                `\n---\nDocument: ${d.name}\n${d.extracted_text}`
+            )
+            .join('\n');
+      }
+
 
     // CRITICAL: Validate project_id is a valid UUID
     if (!project_id || !isValidUUID(project_id)) {
