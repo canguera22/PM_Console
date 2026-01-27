@@ -122,80 +122,123 @@ function buildArtifactIndex(artifacts: any[]) {
 /**
  * SYSTEM PROMPT (Refined for correctness, actionability, grounding)
  */
-const SYSTEM_PROMPT = `You are a Senior Product + Engineering Advisor.
+const SYSTEM_PROMPT = `You are a senior Product Manager reviewing product and release artifacts before finalization.
 
-Your output will be used to decide what engineers build next. You must be:
-- Correct (do not invent facts),
-- Actionable for engineering,
-- Grounded in the provided architecture + artifact context.
+Your goal is to provide **clear, concise, high-signal feedback** that helps a PM quickly improve quality, clarity, and decision-readiness.
 
-Hard Rules (do not violate):
-1) NO HALLUCINATION: If something is not present in the artifact or provided context, say: "Not verifiable from provided artifacts."
-2) EVIDENCE: Any cross-artifact consistency claim MUST cite at least one artifact reference from the "Project Artifact Index" (by artifact_id).
-   - Citation format required: (artifact_id: <uuid>)
-3) ARCHITECTURE GROUNDING: When recommending changes, tie them to the actual system:
-   - Supabase Edge Functions
-   - project_artifacts table keyed by project_id (UUID)
-   - frontend calling functions via supabase.functions.invoke
-4) ENGINEERING ACTIONABILITY: Every major recommended change must include:
-   - What to change
-   - Where (component/table/edge function)
-   - Acceptance Criteria (testable)
-   - Suggested implementation sequence (1-2-3)
+### Inputs
 
-You MUST include a scorecard at the top with these three scores (0-10):
-- Correctness Score
-- Engineering Actionability Score
-- Architecture Grounding Score
-Each score needs 1-2 sentences explaining why.
+You may be given one or more of the following artifact types:
 
-Required Output Sections (in this exact order, always):
-## 1) Scorecard
-## 2) Executive Verdict
-## 3) Artifact Summary
-## 4) Correctness & Completeness Checks
-## 5) Architecture & Data Contract Alignment
-## 6) Cross-Artifact Consistency
-## 7) Engineering Action Plan
-## 8) Recommended Edits
-## 9) Open Questions
+**Release & Communication**
 
-Section 7 requirements:
-- TABLE REQUIRED with columns:
-  Task | Location | Owner (PM/FE/BE/Data/DevOps) | Priority (P0/P1/P2) | Effort (S/M/L) | Acceptance Criteria | Verification (Unit/E2E/Manual/DB Query)
+* Customer-facing release notes
+* Internal release summary
+* Support briefing
+* Technical / engineering notes
+* Categorized issue breakdown
+* Breaking changes / risk alerts
+* Release checklist
 
-Tone: direct, precise, build-oriented. Output in Markdown.`;
+**Product Definition**
 
-/**
- * Compliance gate: enforce required section headings and the presence of a markdown table in section 7.
- * We intentionally check headings with the exact "## X) ..." form because that is what you want displayed/stored.
- */
-function isCompliant(output: string): { ok: boolean; reasons: string[] } {
-  const text = String(output || '');
-  const reasons: string[] = [];
+* PRDs
+* Epics
+* Epic impact statements
+* User stories
+* Acceptance criteria
 
-  const requiredHeadings = [
-    '## 1) Scorecard',
-    '## 2) Executive Verdict',
-    '## 3) Artifact Summary',
-    '## 4) Correctness & Completeness Checks',
-    '## 5) Architecture & Data Contract Alignment',
-    '## 6) Cross-Artifact Consistency',
-    '## 7) Engineering Action Plan',
-    '## 8) Recommended Edits',
-    '## 9) Open Questions',
-  ];
+**Planning & Risk**
 
-  for (const h of requiredHeadings) {
-    if (!text.includes(h)) reasons.push(`Missing heading: ${h}`);
-  }
+* Out-of-scope items
+* Risks and mitigations
+* Dependency mappings
+* Success metrics / KPIs
 
-  // Basic markdown table detection (pipes + separator row)
-  const hasTable = /\|.+\|.+\|/.test(text) && /\|\s*-{2,}\s*\|/.test(text);
-  if (!hasTable) reasons.push('Missing markdown table (required in Section 7)');
+Not all inputs will be present. Review **only what is provided**.
 
-  return { ok: reasons.length === 0, reasons };
-}
+---
+
+### Your responsibilities
+
+* Evaluate **clarity, usefulness, and audience alignment**
+* Identify **material gaps, risks, or confusion**
+* Focus on what a PM should fix **before shipping or committing**
+
+Do **not** restate system architecture, implementation details, or process unless they directly affect understanding or risk.
+
+---
+
+### Output format (STRICT)
+
+Respond using **only the sections below**. Be concise and direct.
+
+---
+
+## 1) Executive Verdict (3–5 sentences)
+
+Answer, based on the artifacts provided:
+
+* Is this content clear and decision-ready?
+* Who is most likely to be confused (customers, support, engineering, leadership)?
+* Is it overly long, vague, inconsistent, or too technical for its audience?
+
+---
+
+## 2) What’s Working (Bullet list, max 5)
+
+Call out what is **effective and should not be changed**.
+
+Only include points that materially help clarity, alignment, or execution.
+
+---
+
+## 3) Top Issues to Fix (Bullet list, max 5)
+
+List only issues that **meaningfully improve understanding, reduce risk, or unblock execution**.
+
+Avoid:
+
+* Minor wording polish
+* Hypothetical future improvements
+* New feature suggestions
+
+---
+
+## 4) Recommended Edits (Concrete)
+
+Provide **specific, actionable changes**, such as:
+
+* “Shorten section X by removing Y”
+* “Clarify ownership for Z”
+* “Move this content to internal-only documentation”
+* “Rewrite this section for a non-technical audience”
+
+Do **not** propose new scope or speculative work.
+
+---
+
+## 5) Final PM Takeaway (1–2 sentences)
+
+If the PM fixed the issues above and changed nothing else, would this artifact be acceptable to:
+
+* ship,
+* share externally,
+* or commit the team against?
+
+Answer directly.
+
+---
+
+### Tone & Constraints
+
+* Be direct, not academic
+* Prefer plain language over jargon
+* Do not invent missing information
+* Do not restate architecture or tooling
+* Optimize for speed of understanding
+`;
+
 
 async function callOpenAIChat({
   system,
@@ -312,7 +355,7 @@ serve(async (req) => {
         .eq('status', 'active')
         .not('extracted_text', 'is', null)
         .order('created_at', { ascending: false })
-        .limit(5);
+        .limit(3);
 
       if (docsError) {
         console.warn('⚠️ Failed to load project documents', docsError);
@@ -322,7 +365,7 @@ serve(async (req) => {
       Array.isArray(projectDocs) && projectDocs.length > 0
         ? projectDocs
             .filter(d => d.extracted_text && d.extracted_text.trim().length > 0)
-            .slice(0, 5) // hard cap for token safety
+            .slice(0, 3) 
             .map(d => {
               const text = d.extracted_text!;
               const snippet =
@@ -372,19 +415,12 @@ serve(async (req) => {
     const artifactForPrompt = compressLargeArtifact(artifactToReview);
 
     // Pick context artifacts by type (best-of)
-    const pickedContext = pickArtifactsByType(allArtifacts, 2, 12);
+    const pickedContext = pickArtifactsByType(allArtifacts, 1, 5);
     const { indexText, included } = buildArtifactIndex(pickedContext);
 
     // Build user message (tight + architecture-grounded)
-    let userMessage = `You are reviewing a PM artifact within a specific architecture.
+    let userMessage = `You are reviewing a PM artifact for clarity, alignment, and decision-readiness.
 
-## Architecture Ground Truth (must be referenced)
-- Frontend: React/Vite calling Supabase Edge Functions via supabase.functions.invoke
-- Persistence: Postgres on Supabase
-- Central store: project_artifacts (keyed by project_id UUID) with fields:
-  project_id, project_name, artifact_type, artifact_name, input_data(JSONB), output_data(TEXT), metadata(JSONB),
-  advisor_feedback, advisor_reviewed_at, status
-- This pm-advisor function loads DB-backed artifacts for context and stores its review back into project_artifacts.
 
 ## Review Target
 - project_id: ${project_id}
@@ -395,10 +431,16 @@ serve(async (req) => {
 `;
 
 if (selected_outputs && Array.isArray(selected_outputs) && selected_outputs.length > 0) {
-  userMessage += `- selected_outputs:\n${selected_outputs
-    .map((o: string) => `  - ${o}`)
-    .join('\n')}\n`;
+  userMessage += `
+The PM intentionally selected the following artifact types for review:
+${selected_outputs.map((o: string) => `- ${o}`).join('\n')}
+
+Review ONLY these artifacts.
+Do NOT comment on missing artifact types.
+Tailor feedback to the intended audience of the selected outputs.
+`;
 }
+
 
 userMessage += `
 
@@ -418,13 +460,11 @@ ${projectDocsContext}
 
 userMessage += `
 
-## Project Artifact Index (you MUST cite artifact_id for cross-artifact claims)
+## Optional Background Artifacts
 ${indexText}
 
-Important constraints:
-- Any cross-artifact statement must cite artifact_id(s) from the index above in the form: (artifact_id: <uuid>)
-- If you cannot verify something from the artifact(s), explicitly say: "Not verifiable from provided artifacts."
-- Output MUST include headings exactly as specified in SYSTEM prompt (## 1) ... through ## 9) ...), and section 7 MUST include the required markdown table.
+Ignore these unless they reveal a material inconsistency or missing context
+that directly affects clarity, risk, or decision-making.
 `;
 
     console.log('🤖 [OpenAI] Calling GPT-4o for PM Advisor review...');
@@ -434,7 +474,7 @@ Important constraints:
     const response = await callOpenAIChat({
       system: SYSTEM_PROMPT,
       user: userMessage,
-      temperature: 0.2,
+      temperature: 0.35,
       maxTokens: 4500,
     });
 
@@ -455,65 +495,6 @@ Important constraints:
       output_length: output.length,
       tokens_used: data.usage?.total_tokens || 'N/A',
     });
-
-    // Compliance gate + single rewrite pass
-    const compliance = isCompliant(output);
-    if (!compliance.ok) {
-      console.warn('⚠️ [Format] Non-compliant output. Reasons:', compliance.reasons);
-
-      const rewriteMessage = `${userMessage}
-
----
-
-You MUST rewrite your output to comply EXACTLY with the required format.
-
-Rules for rewrite:
-- Output MUST include these headings exactly and in order:
-  ## 1) Scorecard
-  ## 2) Executive Verdict
-  ## 3) Artifact Summary
-  ## 4) Correctness & Completeness Checks
-  ## 5) Architecture & Data Contract Alignment
-  ## 6) Cross-Artifact Consistency
-  ## 7) Engineering Action Plan
-  ## 8) Recommended Edits
-  ## 9) Open Questions
-
-- Section 7 MUST include a markdown table with columns:
-  Task | Location | Owner (PM/FE/BE/Data/DevOps) | Priority (P0/P1/P2) | Effort (S/M/L) | Acceptance Criteria | Verification (Unit/E2E/Manual/DB Query)
-
-- If you cannot back a cross-artifact claim with an artifact_id from the index above, write:
-  "Not verifiable from provided artifacts."
-
-Rewrite the following prior output (do not add fluff):
-\`\`\`markdown
-${output}
-\`\`\`
-`;
-
-      const rewriteResp = await callOpenAIChat({
-        system: SYSTEM_PROMPT,
-        user: rewriteMessage,
-        temperature: 0.1,
-        maxTokens: 4500,
-      });
-
-      if (rewriteResp.ok) {
-        const rewriteData = await rewriteResp.json();
-        const rewritten = rewriteData.choices?.[0]?.message?.content || '';
-        const compliance2 = isCompliant(rewritten);
-
-        if (compliance2.ok) {
-          output = rewritten;
-          console.log('✅ [Format] Rewrite succeeded');
-        } else {
-          console.warn('⚠️ [Format] Rewrite still non-compliant. Reasons:', compliance2.reasons);
-          // Return best effort (original) but at least logged.
-        }
-      } else {
-        console.warn('⚠️ [Format] Rewrite call failed; keeping original output');
-      }
-    }
 
     const duration = Date.now() - startTime;
 
@@ -546,7 +527,7 @@ ${output}
           tokens_used: data.usage?.total_tokens,
           duration_ms: duration,
           model: 'gpt-4o',
-          temperature: 0.2,
+          temperature: 0.35,
           context_documents_used: projectDocsContext ? true : false,
           context_artifacts: included.map((a: any) => ({
             id: a.id,

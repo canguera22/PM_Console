@@ -7,6 +7,7 @@ export interface MeetingSession {
   transcript: string;
   output: string | null;
   metadata: Record<string, any>;
+  version: number;
 }
 
 export interface ProjectArtifactRow {

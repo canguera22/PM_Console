@@ -140,7 +140,10 @@ export default function ReleaseCommunications() {
 
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
-  const [currentOutput, setCurrentOutput] = useState<string | null>(null);
+  const [currentOutput, setCurrentOutput] = useState<string>('');
+  type ResultsTab = 'current' | 'advisor' | 'history';
+  const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
+
   const [outputSections, setOutputSections] = useState<OutputSection[]>([]);
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ProjectArtifact[]>([]);
@@ -234,10 +237,12 @@ export default function ReleaseCommunications() {
 
     setSessions(data);
 
-    // Auto-load most recent ONLY if no deep-linked artifact
-    if (!artifactIdFromUrl && data.length > 0) {
-      loadSession(data[0]);
+    // ❌ Do NOT auto-load latest session
+    if (artifactIdFromUrl) {
+      const match = data.find((s) => s.id === artifactIdFromUrl);
+      if (match) loadSession(match);
     }
+
 
 
   } catch (err) {
@@ -635,21 +640,39 @@ await loadSessions();
 
 
     const loadSession = (session: ProjectArtifact) => {
-      setCurrentArtifactId(session.id);
-      setCurrentOutput(session.output_data ?? null);
-      setAdvisorOutput(session.advisor_feedback ?? '');
+    // --- Core artifact state
+    setCurrentArtifactId(session.id);
 
-      const input = session.input_data || {};
-      setReleaseName(input.release_name ?? '');
-      setTargetAudience(input.target_audience ?? '');
-      setKnownRisks(input.known_risks ?? '');
-      setSelectedOutputs(coerceSelectedOutputs(input.selected_outputs));
+    const output = session.output_data ?? '';
+    setCurrentOutput(output);
+    setAdvisorOutput(session.advisor_feedback ?? '');
 
-      // ✅ VERSIONING (SOURCE OF TRUTH = metadata)
-      const metadata = session.metadata ?? {};
-      setCurrentArtifactVersion(metadata.version_number ?? 1);
-      setLastModifiedBy(metadata.last_modified_by ?? 'agent');
-    };
+    // --- Restore inputs
+    const input = session.input_data || {};
+    setReleaseName(input.release_name ?? '');
+    setTargetAudience(input.target_audience ?? '');
+    setKnownRisks(input.known_risks ?? '');
+    setSelectedOutputs(coerceSelectedOutputs(input.selected_outputs));
+
+    // --- Versioning (source of truth = metadata)
+    const metadata = session.metadata ?? {};
+    setCurrentArtifactVersion(metadata.version_number ?? 1);
+    setLastModifiedBy(metadata.last_modified_by ?? 'agent');
+
+    // --- 🔥 CRITICAL UX FIXES (mirror Doc Agent)
+    const sections = splitAgentOutputIntoSections(output);
+    setOutputSections(sections);
+
+    setActiveSectionId(sections[0]?.id ?? null);
+
+    setEditingSectionId(null);
+    setEditableOutput('');
+    setEditViewMode('edit');
+
+    // 👉 FORCE user into Current tab
+    setActiveResultsTab('current');
+  };
+
 
 
 
@@ -701,207 +724,207 @@ await loadSessions();
         >
         {/* Column 1 Inputs */}
         <div className="h-[calc(100vh-180px)]">
-  {isInputsCollapsed ? (
-    /* COLLAPSED STATE */
-    <div
-      className="h-full flex flex-col items-center justify-start
-                pt-3 border rounded-xl bg-muted/30
-                overflow-hidden"
-      style={{ width: '56px' }}
-    >
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => setIsInputsCollapsed(false)}
-      >
-        <ArrowRight className="h-4 w-4" />
-      </Button>
-
-      <span
-        className="mt-2 text-xs"
-        style={{ writingMode: 'vertical-rl' }}
-      >
-        Inputs
-      </span>
-    </div>
-  ) : (
-    /* EXPANDED STATE */
-    <div className="space-y-6 h-full overflow-hidden">
-      <ErrorDisplay error={error} onDismiss={() => setError(null)} />
-      <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />
-
-      <Card className="h-full flex flex-col">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-lg font-semibold text-[#111827]">
-              CSV & Release Inputs
-            </CardTitle>
-            <CardDescription>
-              Upload Jira data and add contextual information
-            </CardDescription>
-          </div>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsInputsCollapsed(true)}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </CardHeader>
-
-            <div className="px-6 pt-2">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <CardTitle className="text-lg font-semibold text-[#111827]">CSV Upload</CardTitle>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-sm">
-                          <div className="space-y-2">
-                            <p className="font-semibold">CSV fields for optimal output:</p>
-                            <div className="space-y-1 text-sm">
-                              <p className="font-medium">Required:</p>
-                              <ul className="list-disc pl-4 space-y-0.5">
-                                <li>Issue Key</li>
-                                <li>Issue Type</li>
-                                <li>Summary</li>
-                                <li>Description</li>
-                                <li>Status</li>
-                              </ul>
-                            </div>
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </div>
-                  <CardDescription>Upload Jira CSV export</CardDescription>
-                </div>
-              </div>
-            </div>
-
-            <CardContent className="space-y-4">
-              <div
-                className={`relative rounded-lg border-2 border-dashed transition-colors ${
-                  isDragging
-                    ? 'border-primary bg-primary/5'
-                    : parseError
-                    ? 'border-destructive bg-destructive/5'
-                    : csvFile
-                    ? 'border-primary bg-primary/5'
-                    : 'border-muted-foreground/25 hover:border-muted-foreground/50'
-                }`}
-                onDragOver={handleDragOver}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleDrop}
+          {isInputsCollapsed ? (
+            /* COLLAPSED STATE */
+            <div
+              className="h-full flex flex-col items-center justify-start
+                        pt-3 border rounded-xl bg-muted/30
+                        overflow-hidden"
+              style={{ width: '56px' }}
+            >
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsInputsCollapsed(false)}
               >
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={handleFileInputChange}
-                  className={`absolute inset-0 z-10 cursor-pointer opacity-0 ${
-                    csvFile ? 'pointer-events-none' : ''
-                  }`}
-                  id="csv-upload"
-                />
+                <ArrowRight className="h-4 w-4" />
+              </Button>
 
-                <div className="flex flex-col items-center justify-center p-8 text-center">
-                  {csvFile ? (
-                    <>
-                      <FileText className="h-12 w-12 text-primary mb-3" />
-                      <div className="space-y-1">
-                        <p className="font-medium">{csvFile.name}</p>
-                        {isParsingCsv ? (
-                          <p className="text-sm text-muted-foreground">Parsing CSV…</p>
-                        ) : parsedCsv ? (
-                          <p className="text-sm text-muted-foreground">{parsedCsv.rowCount} issues loaded</p>
-                        ) : null}
+              <span
+                className="mt-2 text-xs"
+                style={{ writingMode: 'vertical-rl' }}
+              >
+                Inputs
+              </span>
+            </div>
+          ) : (
+            /* EXPANDED STATE */
+            <div className="space-y-6 h-full overflow-hidden flex flex-col">
+              <ErrorDisplay error={error} onDismiss={() => setError(null)} />
+              <ErrorDisplay error={advisorError} onDismiss={() => setAdvisorError(null)} />
+
+              <Card className="h-full flex flex-col">
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="text-lg font-semibold text-[#111827]">
+                      CSV & Release Inputs
+                    </CardTitle>
+                    <CardDescription>
+                      Upload Jira data and add contextual information
+                    </CardDescription>
+                  </div>
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setIsInputsCollapsed(true)}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                </CardHeader>
+
+                    <div className="px-6 pt-2">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <CardTitle className="text-lg font-semibold text-[#111827]">CSV Upload</CardTitle>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-sm">
+                                  <div className="space-y-2">
+                                    <p className="font-semibold">CSV fields for optimal output:</p>
+                                    <div className="space-y-1 text-sm">
+                                      <p className="font-medium">Required:</p>
+                                      <ul className="list-disc pl-4 space-y-0.5">
+                                        <li>Issue Key</li>
+                                        <li>Issue Type</li>
+                                        <li>Summary</li>
+                                        <li>Description</li>
+                                        <li>Status</li>
+                                      </ul>
+                                    </div>
+                                  </div>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </div>
+                          <CardDescription>Upload Jira CSV export</CardDescription>
+                        </div>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          clearFile();
-                        }}
-                        className="mt-3 gap-2"
-                        disabled={isParsingCsv}
+                    </div>
+
+                    <CardContent className="space-y-4 overflow-y-auto flex-1">
+                      <div
+                        className={`relative rounded-lg border-2 border-dashed transition-colors ${
+                          isDragging
+                            ? 'border-primary bg-primary/5'
+                            : parseError
+                            ? 'border-destructive bg-destructive/5'
+                            : csvFile
+                            ? 'border-primary bg-primary/5'
+                            : 'border-muted-foreground/25 hover:border-muted-foreground/50'
+                        }`}
+                        onDragOver={handleDragOver}
+                        onDragLeave={() => setIsDragging(false)}
+                        onDrop={handleDrop}
                       >
-                        <X className="h-4 w-4" />
-                        Remove
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="h-12 w-12 text-muted-foreground mb-3" />
-                      <p className="font-medium">Drop CSV file here</p>
-                      <p className="text-sm text-muted-foreground mt-1">or click to browse</p>
-                      <Button variant="outline" size="sm" className="mt-3" asChild>
-                        <label htmlFor="csv-upload" className="cursor-pointer">
-                          Browse Files
-                        </label>
-                      </Button>
-                    </>
-                  )}
+                        <input
+                          type="file"
+                          accept=".csv"
+                          onChange={handleFileInputChange}
+                          className={`absolute inset-0 z-10 cursor-pointer opacity-0 ${
+                            csvFile ? 'pointer-events-none' : ''
+                          }`}
+                          id="csv-upload"
+                        />
+
+                        <div className="flex flex-col items-center justify-center p-8 text-center">
+                          {csvFile ? (
+                            <>
+                              <FileText className="h-12 w-12 text-primary mb-3" />
+                              <div className="space-y-1">
+                                <p className="font-medium">{csvFile.name}</p>
+                                {isParsingCsv ? (
+                                  <p className="text-sm text-muted-foreground">Parsing CSV…</p>
+                                ) : parsedCsv ? (
+                                  <p className="text-sm text-muted-foreground">{parsedCsv.rowCount} issues loaded</p>
+                                ) : null}
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  clearFile();
+                                }}
+                                className="mt-3 gap-2"
+                                disabled={isParsingCsv}
+                              >
+                                <X className="h-4 w-4" />
+                                Remove
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="h-12 w-12 text-muted-foreground mb-3" />
+                              <p className="font-medium">Drop CSV file here</p>
+                              <p className="text-sm text-muted-foreground mt-1">or click to browse</p>
+                              <Button variant="outline" size="sm" className="mt-3" asChild>
+                                <label htmlFor="csv-upload" className="cursor-pointer">
+                                  Browse Files
+                                </label>
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {parseError && (
+                        <Alert variant="destructive">
+                          <AlertCircle className="h-4 w-4" />
+                          <AlertDescription>{parseError}</AlertDescription>
+                        </Alert>
+                      )}
+
+                      <Separator />
+
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="release-name" className="text-sm font-medium text-[#111827]">
+                            Release Name (Optional)
+                          </Label>
+                          <Input
+                            id="release-name"
+                            placeholder="e.g., v2.5.0, Sprint 42"
+                            value={releaseName}
+                            onChange={(e) => setReleaseName(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="target-audience" className="text-sm font-medium text-[#111827]">
+                            Target Audience (Optional)
+                          </Label>
+                          <Input
+                            id="target-audience"
+                            placeholder="e.g., Internal stakeholders, Sales, External users"
+                            value={targetAudience}
+                            onChange={(e) => setTargetAudience(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="known-risks" className="text-sm font-medium text-[#111827]">
+                            Known Risks / Limitations (Optional)
+                          </Label>
+                          <Textarea
+                            id="known-risks"
+                            placeholder="Optional: Note any known issues or limitations"
+                            value={knownRisks}
+                            onChange={(e) => setKnownRisks(e.target.value)}
+                            rows={3}
+                          />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
-              </div>
-
-              {parseError && (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>{parseError}</AlertDescription>
-                </Alert>
-              )}
-
-              <Separator />
-
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="release-name" className="text-sm font-medium text-[#111827]">
-                    Release Name (Optional)
-                  </Label>
-                  <Input
-                    id="release-name"
-                    placeholder="e.g., v2.5.0, Sprint 42"
-                    value={releaseName}
-                    onChange={(e) => setReleaseName(e.target.value)}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="target-audience" className="text-sm font-medium text-[#111827]">
-                    Target Audience (Optional)
-                  </Label>
-                  <Input
-                    id="target-audience"
-                    placeholder="e.g., Internal stakeholders, Sales, External users"
-                    value={targetAudience}
-                    onChange={(e) => setTargetAudience(e.target.value)}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="known-risks" className="text-sm font-medium text-[#111827]">
-                    Known Risks / Limitations (Optional)
-                  </Label>
-                  <Textarea
-                    id="known-risks"
-                    placeholder="Optional: Note any known issues or limitations"
-                    value={knownRisks}
-                    onChange={(e) => setKnownRisks(e.target.value)}
-                    rows={3}
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-  )}
-  </div>
+                )}
+             </div>
 
         {/* Column 2 – Outputs */}
       <div className="h-[calc(100vh-180px)]">
@@ -985,26 +1008,6 @@ await loadSessions();
                   'Generate Release Notes'
                 )}
               </Button>
-
-              <Button
-                variant="outline"
-                onClick={handleRunAdvisorReview}
-                disabled={!currentOutput || !currentArtifactId || isRunningAdvisor}
-                className="w-full mt-3"
-                size="lg"
-              >
-                {isRunningAdvisor ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Running PM Advisor Review...
-                  </>
-                ) : (
-                  <>
-                    <Lightbulb className="mr-2 h-4 w-4" />
-                    Run PM Advisor Review
-                  </>
-                )}
-              </Button>
             </CardContent>
           </Card>
         )}
@@ -1013,22 +1016,47 @@ await loadSessions();
         {/* Column 3 Output */}
         <div className="space-y-6">
           <Card className="lg:sticky lg:top-6">
-            <CardHeader className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <CardTitle className="text-lg font-semibold text-[#111827]">
-                  Release Documentation
-                </CardTitle>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-3">
+                {/* Left: title + version */}
+                <div className="flex items-center gap-3">
+                  <CardTitle className="text-lg font-semibold text-[#111827]">
+                    Release Documentation
+                  </CardTitle>
 
-                <Badge
-                  variant="secondary"
-                  className="h-6 px-2 text-xs flex items-center"
+                  <Badge variant="secondary">
+                    v{currentArtifactVersion} · {lastModifiedBy === 'user' ? 'Edited' : 'Generated'}
+                  </Badge>
+                </div>
+
+                {/* Right: PM Advisor */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRunAdvisorReview}
+                  disabled={!currentOutput || !currentArtifactId || isRunningAdvisor}
+                  className="flex items-center gap-2"
                 >
-                  v{currentArtifactVersion} · {lastModifiedBy === 'user' ? 'Edited' : 'Generated'}
-                </Badge>
+                  {isRunningAdvisor ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Reviewing…
+                    </>
+                  ) : (
+                    <>
+                      <Lightbulb className="w-4 h-4" />
+                      Run PM Advisor
+                    </>
+                  )}
+                </Button>
               </div>
             </CardHeader>
             <CardContent>
-              <Tabs defaultValue="current" className="w-full">
+              <Tabs
+                value={activeResultsTab}
+                onValueChange={(val) => setActiveResultsTab(val as ResultsTab)}
+                className="h-full"
+              >
                 <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="current">Current Release Notes</TabsTrigger>
                   <TabsTrigger value="advisor">Advisor Review</TabsTrigger>

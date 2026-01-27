@@ -1,15 +1,12 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
-import ReactMarkdown from 'react-markdown';
 import {
   FileText,
   MessageSquare,
   Sparkles,
   TrendingUp,
-  Calendar,
   ChevronRight,
-  RefreshCw,
   Filter,
   Search,
   X,
@@ -17,7 +14,6 @@ import {
 } from 'lucide-react';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { useSearchParams } from 'react-router-dom';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { extractTextFromFile } from '@/lib/documentExtraction';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
@@ -53,6 +49,15 @@ interface ProjectDocument {
   status: 'active' | 'archived';
 }
 
+const MODULE_ROUTE_BY_TYPE: Record<string, string> = {
+  meeting_intelligence: '/meetings',
+  product_documentation: '/documentation',
+  release_communications: '/releases',
+  prioritization: '/prioritization',
+};
+
+
+
 
 const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
   meeting_intelligence: {
@@ -87,14 +92,6 @@ const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
     borderColor: 'border-orange-200',
     textColor: 'text-orange-700'
   },
-  pm_advisor: {
-    label: 'PM Advisor',
-    icon: Sparkles,
-    color: 'pink',
-    bgColor: 'bg-pink-50',
-    borderColor: 'border-pink-200',
-    textColor: 'text-pink-700'
-  }
 };
   const getArtifactDisplayName = (artifact: ProjectArtifact) => {
   if (artifact.artifact_type === 'prioritization') {
@@ -107,110 +104,48 @@ const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
   return artifact.artifact_name;
 };
 
-type OutputSection = {
-  id: string;
-  title: string;
-  content: string;
-};
-
-function splitAgentOutputIntoSections(output: string): OutputSection[] {
-  if (!output || !output.trim()) return [];
-
-  const rawSections = output
-    .split(/\n\s*---\s*\n/g)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  return rawSections.map((content, idx) => {
-    const firstLine = content.split('\n')[0]?.trim() ?? '';
-    const h1Match = firstLine.match(/^#\s+(.*)$/);
-
-    const title = h1Match?.[1]?.trim() || `Section ${idx + 1}`;
-
-    return {
-      id: `${idx}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-      title,
-      content,
-    };
-  });
-}
-
-/**
- * Renders one output as either:
- * - a single markdown document, OR
- * - multiple sections split by "---" with tabs.
- *
- * For release_communications artifacts, we try to name tabs using
- * artifact.input_data.selected_outputs (Customer/Internal/Support etc.)
- */
-function ArtifactOutputViewer({
-  output,
-  selectedOutputs,
-}: {
-  output: string;
-  selectedOutputs?: any;
-}) {
-  const sections = splitAgentOutputIntoSections(output);
-
-  // Use the user's selected output labels when possible
-  const labels: string[] = Array.isArray(selectedOutputs)
-    ? selectedOutputs.filter((x) => typeof x === 'string')
-    : [];
-
-  const finalSections = sections.map((s, idx) => {
-    const labelFromSelections = labels[idx];
-    const useLabel =
-      labelFromSelections && labelFromSelections.trim().length > 0
-        ? labelFromSelections
-        : s.title;
-
-    return { ...s, title: useLabel };
-  });
-
-  // Single doc fallback
-  if (finalSections.length <= 1) {
-    return (
-      <div className="prose max-w-none mb-6">
-        <ReactMarkdown>{output}</ReactMarkdown>
-      </div>
-    );
-  }
-
-  // Multi-tab view
-  return (
-    <div className="mb-6">
-      <Tabs defaultValue={finalSections[0].id} className="w-full">
-        <div className="overflow-x-auto">
-          <TabsList className="inline-flex w-max gap-1">
-            {finalSections.map((sec) => (
-              <TabsTrigger key={sec.id} value={sec.id} className="whitespace-nowrap">
-                {sec.title}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
-
-        {finalSections.map((sec) => (
-          <TabsContent key={sec.id} value={sec.id} className="mt-4">
-            <div className="prose max-w-none">
-              <ReactMarkdown>{sec.content}</ReactMarkdown>
-            </div>
-          </TabsContent>
-        ))}
-      </Tabs>
-    </div>
-  );
-}
-
 
 export default function ProjectDashboard() {
   const { activeProject, isLoading: projectLoading } = useActiveProject();
   const [artifacts, setArtifacts] = useState<ProjectArtifact[]>([]);
+  const getActivityMeta = (type?: string) => {
+  const now = new Date();
+  const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(now.getDate() - 7);
+
+    const relevant = type
+      ? artifacts.filter(a => a.artifact_type === type)
+      : artifacts;
+
+    if (relevant.length === 0) {
+      return { deltaLabel: 'No activity yet' };
+    }
+
+    const recentCount = relevant.filter(
+      a => new Date(a.created_at) >= sevenDaysAgo
+    ).length;
+
+    const latest = relevant.reduce((latest, a) =>
+      new Date(a.created_at) > new Date(latest.created_at) ? a : latest
+    );
+
+    const daysAgo = Math.floor(
+      (now.getTime() - new Date(latest.created_at).getTime()) / (1000 * 60 * 60 * 24)
+    );
+
+    return {
+      deltaLabel:
+        recentCount > 0
+          ? `+${recentCount} this week`
+          : daysAgo === 0
+            ? 'Last activity: today'
+            : `Last activity: ${daysAgo}d ago`,
+    };
+  };
   const [documents, setDocuments] = useState<ProjectDocument[]>([]);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [selectedArtifact, setSelectedArtifact] = useState<ProjectArtifact | null>(null);
   const [filterType, setFilterType] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -227,16 +162,8 @@ const artifactIdFromUrl = searchParams.get('artifact');
   fetchArtifacts();
   fetchProjectDocuments();
 
-  if (artifactIdFromUrl) {
-    openArtifactById(artifactIdFromUrl);
-  }
 }, [activeProject, artifactIdFromUrl]);
 
-
-const closeArtifact = () => {
-  setSelectedArtifact(null);
-  setSearchParams({});
-};
 
   const fetchArtifacts = async () => {
     if (!activeProject) return;
@@ -250,6 +177,7 @@ const closeArtifact = () => {
         .select('*')
         .eq('project_id', activeProject.id)
         .eq('status', 'active')
+        .not('artifact_type', 'eq', 'pm_advisor_feedback')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -356,33 +284,7 @@ const handleDocumentUpload = async (file: File) => {
   } finally {
     setUploadingDoc(false);
   }
-
-  const openArtifactById = async (artifactId: string) => {
-  if (!activeProject) return;
-
-  try {
-    const { data, error } = await supabase
-      .from('project_artifacts')
-      .select('*')
-      .eq('id', artifactId)
-      .eq('project_id', activeProject.id)
-      .eq('status', 'active')
-      .single();
-
-    if (error || !data) return;
-
-    setSelectedArtifact(data);
-
-    // Ensure the section is expanded
-    setCollapsedSections(prev => ({
-      ...prev,
-      [data.artifact_type]: false,
-    }));
-
-  } catch (err) {
-    console.warn('Artifact not accessible', err);
-  }
-};
+}
 
 const toggleSection = (type: string) => {
   setCollapsedSections(prev => ({
@@ -424,9 +326,7 @@ const toggleSection = (type: string) => {
     meeting_intelligence: artifacts.filter(a => a.artifact_type === 'meeting_intelligence').length,
     product_documentation: artifacts.filter(a => a.artifact_type === 'product_documentation').length,
     release_communications: artifacts.filter(a => a.artifact_type === 'release_communications').length,
-    prioritization: artifacts.filter(a => a.artifact_type === 'prioritization').length,
-    pm_advisor: artifacts.filter(a => a.artifact_type === 'pm_advisor').length,
-    with_advisor_feedback: artifacts.filter(a => a.advisor_feedback).length
+    prioritization: artifacts.filter(a => a.artifact_type === 'prioritization').length
   };
 
   if (projectLoading) {
@@ -451,7 +351,7 @@ const toggleSection = (type: string) => {
                 </h1>
               </div>
               <p className="text-sm text-[#6B7280]">
-                All artifacts for {activeProject?.name || 'Unknown Project'}
+                All artifacts for the {activeProject?.name || 'Unknown Project'} project are cound here.
               </p>
             </div>
           </div>
@@ -460,13 +360,42 @@ const toggleSection = (type: string) => {
 
       {/* Stats */}
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          <StatCard label="Total Artifacts" value={stats.total} color="gray" />
-          <StatCard label="Meetings" value={stats.meeting_intelligence} color="blue" />
-          <StatCard label="PRDs" value={stats.product_documentation} color="purple" />
-          <StatCard label="Releases" value={stats.release_communications} color="green" />
-          <StatCard label="Prioritization" value={stats.prioritization} color="orange" />
-          <StatCard label="PM Reviews" value={stats.pm_advisor} color="pink" />
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+          <StatCard
+              label="Total Artifacts"
+              value={stats.total}
+              color="gray"
+              meta={getActivityMeta().deltaLabel}
+              highlight
+            />
+
+            <StatCard
+              label="Meetings"
+              value={stats.meeting_intelligence}
+              color="blue"
+              meta={getActivityMeta('meeting_intelligence').deltaLabel}
+            />
+
+            <StatCard
+              label="PRDs"
+              value={stats.product_documentation}
+              color="purple"
+              meta={getActivityMeta('product_documentation').deltaLabel}
+            />
+
+            <StatCard
+              label="Releases"
+              value={stats.release_communications}
+              color="green"
+              meta={getActivityMeta('release_communications').deltaLabel}
+            />
+
+            <StatCard
+              label="Prioritization"
+              value={stats.prioritization}
+              color="orange"
+              meta={getActivityMeta('prioritization').deltaLabel}
+            />
         </div>
       </div>
 
@@ -575,7 +504,6 @@ const toggleSection = (type: string) => {
                 <option value="product_documentation">Product Documentation</option>
                 <option value="release_communications">Release Communications</option>
                 <option value="prioritization">Backlog Prioritization</option>
-                <option value="pm_advisor">PM Advisor</option>
               </select>
             </div>
           </div>
@@ -591,13 +519,23 @@ const toggleSection = (type: string) => {
         ) : filteredArtifacts.length === 0 ? (
           <div className="bg-white rounded-lg border border-[#E5E7EB] p-12 text-center">
             <FileText className="w-12 h-12 text-[#9CA3AF] mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-[#111827] mb-2">No artifacts found</h3>
+
+            <h3 className="text-lg font-medium text-[#111827] mb-2">
+              No artifacts yet —
+              <button
+                onClick={() => navigate('/')}
+                className="ml-1 text-[#3B82F6] hover:underline font-semibold"
+              >
+                add your first document now
+              </button>
+              !
+            </h3>
+
             <p className="text-sm text-[#6B7280]">
-              {searchQuery || filterType !== 'all'
-                ? 'Try adjusting your filters'
-                : 'Start creating artifacts in the modules above'}
+              Start creating artifacts in the modules above
             </p>
           </div>
+
         ) : (
                    <div className="space-y-8">
             {Object.entries(groupedArtifacts).map(([type, typeArtifacts]) => (
@@ -616,10 +554,14 @@ const toggleSection = (type: string) => {
                   <h2 className="text-lg font-semibold text-[#111827]">
                     {ARTIFACT_TYPE_CONFIG[type]?.label || type}
                   </h2>
+
                   <span className="text-sm text-[#6B7280]">
                     ({typeArtifacts.length})
                   </span>
 
+                  <span className="ml-2 text-xs text-[#6B7280] italic">
+                    — {getActivityMeta(type).deltaLabel}
+                  </span>
                   <ChevronRight
                     className={`ml-auto w-4 h-4 transition-transform ${
                       collapsedSections[type] ? '' : 'rotate-90'
@@ -636,8 +578,10 @@ const toggleSection = (type: string) => {
                         artifact={artifact}
                         config={ARTIFACT_TYPE_CONFIG[artifact.artifact_type]}
                         onClick={() => {
-                          setSelectedArtifact(artifact);
-                          setSearchParams({ artifact: artifact.id });
+                          const route = MODULE_ROUTE_BY_TYPE[artifact.artifact_type];
+                          if (!route) return;
+
+                          navigate(`${route}?artifact=${artifact.id}`);
                         }}
                       />
                     ))}
@@ -648,23 +592,24 @@ const toggleSection = (type: string) => {
           </div> 
         )}         
       </div>       
-
-
-
-      {/* Artifact Detail Modal */}
-      {selectedArtifact && (
-        <ArtifactDetailModal
-          artifact={selectedArtifact}
-          config={ARTIFACT_TYPE_CONFIG[selectedArtifact.artifact_type]}
-          onClose={closeArtifact}
-        />
-      )}
     </div>
   );
 }
 
 // Stat Card Component
-function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+function StatCard({
+  label,
+  value,
+  color,
+  meta,
+  highlight = false,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  meta?: string;
+  highlight?: boolean;
+}) {
   const colorClasses: Record<string, string> = {
     gray: 'bg-[#F3F4F6] text-[#374151]',
     blue: 'bg-[#DBEAFE] text-[#1E40AF]',
@@ -675,9 +620,22 @@ function StatCard({ label, value, color }: { label: string; value: number; color
   };
 
   return (
-    <div className={`rounded-lg p-4 ${colorClasses[color] || colorClasses.gray}`}>
-      <div className="text-2xl font-bold">{value}</div>
-      <div className="text-xs mt-1 opacity-75">{label}</div>
+    <div
+      className={`
+        rounded-xl p-5 transition-all duration-200
+        ${highlight ? 'ring-2 ring-[#3B82F6]/30 shadow-lg' : 'hover:shadow-lg'}
+        hover:-translate-y-[2px]
+        ${colorClasses[color] || colorClasses.gray}
+      `}
+    >
+      <div className="text-2xl font-bold leading-tight">{value}</div>
+      <div className="text-xs mt-1 opacity-80">{label}</div>
+
+      {meta && (
+        <div className="mt-1 text-[11px] opacity-70">
+          {meta}
+        </div>
+      )}
     </div>
   );
 }
@@ -699,7 +657,7 @@ function ArtifactCard({ artifact, config, onClick }: {
         <Icon className={`w-5 h-5 ${config?.textColor}`} />
         {artifact.advisor_feedback && (
           <span className="text-xs bg-[#FCE7F3] text-[#9F1239] px-2 py-1 rounded-full">
-            Reviewed
+            Agent Reviewed
           </span>
         )}
       </div>
@@ -716,88 +674,4 @@ function ArtifactCard({ artifact, config, onClick }: {
   );
 }
 
-// Artifact Detail Modal Component
-function ArtifactDetailModal({ artifact, config, onClose }: {
-  artifact: ProjectArtifact;
-  config: any;
-  onClose: () => void;
-}) {
-  const Icon = config?.icon || FileText;
-  
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-        {/* Header */}
-        <div className={`p-6 border-b ${config?.borderColor} ${config?.bgColor}`}>
-          <div className="flex items-start justify-between">
-            <div className="flex items-start gap-3">
-              <Icon className={`w-6 h-6 ${config?.textColor} mt-1`} />
-              <div>
-                <h2 className="text-xl font-bold text-[#111827] mb-1">
-                  {getArtifactDisplayName(artifact)}
-                </h2>
-                <p className="text-sm text-[#6B7280]">
-                  {config?.label} • {new Date(artifact.created_at).toLocaleDateString()} at {new Date(artifact.created_at).toLocaleTimeString()}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={onClose}
-              className="text-[#9CA3AF] hover:text-[#6B7280] transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
-          </div>
-        </div>
-        
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {/* Output */}
-            <ArtifactOutputViewer
-              output={artifact.output_data ?? ''}
-              selectedOutputs={artifact.input_data?.selected_outputs}
-            />
-
-
-          
-          {/* PM Advisor Feedback */}
-          {artifact.advisor_feedback && (
-            <div className="mt-6 pt-6 border-t border-[#E5E7EB]">
-              <div className="flex items-center gap-2 mb-4">
-                <Sparkles className="w-5 h-5 text-[#EC4899]" />
-                <h3 className="text-lg font-semibold text-[#111827]">PM Advisor Review</h3>
-                <span className="text-xs text-[#6B7280]">
-                  {new Date(artifact.advisor_reviewed_at!).toLocaleDateString()}
-                </span>
-              </div>
-              <div className="bg-[#FCE7F3] border border-[#F9A8D4] rounded-lg p-4">
-                <div className="prose max-w-none">
-                  <ReactMarkdown>{artifact.advisor_feedback}</ReactMarkdown>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {/* Metadata */}
-          <div className="mt-6 pt-6 border-t border-[#E5E7EB]">
-            <h3 className="text-sm font-semibold text-[#111827] mb-2">Metadata</h3>
-            <pre className="text-xs bg-[#F3F4F6] p-4 rounded border border-[#E5E7EB] overflow-x-auto">
-              {JSON.stringify(artifact.metadata, null, 2)}
-            </pre>
-          </div>
-        </div>
-        
-        {/* Footer */}
-        <div className="p-4 border-t border-[#E5E7EB] flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-[#F3F4F6] text-[#374151] rounded-lg hover:bg-[#E5E7EB] transition-colors"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}}
 

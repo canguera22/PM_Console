@@ -38,10 +38,30 @@ export default function MeetingIntelligence() {
 
   // Analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [currentOutput, setCurrentOutput] = useState<string | null>(null);
   const [sessions, setSessions] = useState<MeetingSession[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
+  const [currentOutput, setCurrentOutput] = useState<string>('');
+
+// 🔑 MAIN RESULTS TABS CONTROL
+type ResultsTab = 'current' | 'history';
+const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
+
   const [copiedToClipboard, setCopiedToClipboard] = useState(false);
+
+  // Versioning
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedOutput, setEditedOutput] = useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<number>(1);
+  const [lastModifiedBy, setLastModifiedBy] = useState<'agent' | 'user'>('agent');
+
+
+  //Editing
+  const [editingSheet, setEditingSheet] = useState<string | null>(null);
+  type EditViewMode = 'edit' | 'preview';
+  const [editViewMode, setEditViewMode] = useState<EditViewMode>('edit');
+
+
+
 
   // Column collapse state
   const [isInputsCollapsed, setIsInputsCollapsed] = useState(false);
@@ -80,6 +100,8 @@ export default function MeetingIntelligence() {
 
   const artifactToMeetingSession = (a: ProjectArtifactRow): MeetingSession => {
     const input = a.input_data ?? {};
+    const metadata = (a.metadata ?? {}) as Record<string, any>;
+
     return {
       id: a.id,
       created_at: a.created_at,
@@ -88,9 +110,11 @@ export default function MeetingIntelligence() {
       participants: (input.participants as string) ?? null,
       transcript: (input.meeting_transcript as string) ?? '',
       output: a.output_data ?? null,
-      metadata: (a.metadata ?? {}) as Record<string, any>,
+      metadata,
+      version: metadata.version ?? 1, 
     };
   };
+
 
   const loadSessions = async () => {
     if (!activeProject) return;
@@ -239,10 +263,66 @@ export default function MeetingIntelligence() {
       toast({ title: 'Error', description: 'Failed to copy to clipboard', variant: 'destructive' });
     }
   };
+  const handleSaveEdit = async () => {
+    if (!editedOutput || !currentOutput || !activeProject) return;
+
+    try {
+      const newVersion = currentVersion + 1;
+
+      await supabaseFetch(`/project_artifacts?id=eq.${artifactIdFromUrl}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          output_data: editedOutput,
+          metadata: {
+            version: currentVersion + 1,
+            last_modified_by: 'user',
+            last_modified_at: new Date().toISOString(),
+          },
+        }),
+      });
+
+      setCurrentOutput(editedOutput);
+      setCurrentVersion(newVersion);
+      setLastModifiedBy('user');
+      setIsEditing(false);
+      setEditedOutput(null);
+      setEditViewMode('edit');
+
+      await loadSessions();
+
+      toast({
+        title: 'Saved',
+        description: `Saved as version ${newVersion}`,
+      });
+    } catch {
+      toast({
+        title: 'Error',
+        description: 'Failed to save edited version',
+        variant: 'destructive',
+      });
+    }
+  };
+
 
   const loadSession = (session: MeetingSession) => {
-    setCurrentOutput(session.output);
+    // Core output
+    setCurrentOutput(session.output ?? '');
+    
+    // Reset editing state
+    setEditedOutput(null);
+    setIsEditing(false);
+    setEditViewMode('edit');
+
+    // Versioning
+    setCurrentVersion(session.version ?? 1);
+    setLastModifiedBy(
+      session.metadata?.last_modified_by === 'user' ? 'user' : 'agent'
+    );
+
+    // 🔥 CRITICAL: force visible navigation
+    setActiveResultsTab('current');
   };
+
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -265,7 +345,7 @@ export default function MeetingIntelligence() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => navigate('/')}
+                onClick={() => navigate('/dashboard')}
                 className="gap-2 text-[#6B7280] hover:text-[#111827]"
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -417,82 +497,152 @@ export default function MeetingIntelligence() {
               )}
             </div>
 
-        {/* Right Panel - Output Display */}
+        {/* 2nd Column - Output Display */}
         <div className="space-y-6">
           <Card className="lg:sticky lg:top-6">
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg font-semibold text-[#111827]">Analysis Results</CardTitle>
+              <div className="flex items-center gap-3">
+                <CardTitle className="text-lg font-semibold text-[#111827]">
+                  Analysis Results
+                </CardTitle>
+
+                <Badge variant="secondary">
+                  v{currentVersion} · {lastModifiedBy === 'user' ? 'Edited' : 'Generated'}
+                </Badge>
+              </div>
             </CardHeader>
 
+
             <CardContent>
-              <Tabs defaultValue="current" className="w-full">
+              <Tabs
+                value={activeResultsTab}
+                onValueChange={(val) => setActiveResultsTab(val as ResultsTab)}
+                className="h-full"
+              >
                 <TabsList className="grid w-full grid-cols-2 bg-transparent border-b border-[#E5E7EB] rounded-none h-auto p-0">
                   <TabsTrigger value="current">Current Analysis</TabsTrigger>
                   <TabsTrigger value="history">Session History</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="current" className="mt-4 space-y-4">
-                  {currentOutput ? (
-                    <>
-                      <div className="flex justify-end">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleCopyToClipboard}
-                          className="gap-2"
-                        >
-                          {copiedToClipboard ? (
-                            <>
-                              <CheckCircle2 className="h-4 w-4" />
-                              Copied!
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="h-4 w-4" />
-                              Copy to Clipboard
-                            </>
-                          )}
-                        </Button>
-                      </div>
+                {/* CURRENT ANALYSIS TAB */}
+                  <TabsContent value="current" className="mt-4 space-y-4">
+                    {currentOutput ? (
+                      <>
+                        {/* ACTION BAR */}
+                        {!isEditing ? (
+                          /* VIEW MODE */
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setEditedOutput(currentOutput);
+                                setIsEditing(true);
+                                setEditViewMode('edit');
+                              }}
+                            >
+                              Edit
+                            </Button>
 
-                      <div className="prose prose-sm max-w-none rounded-lg border border-[#E5E7EB] bg-white p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
-                        <ReactMarkdown>{currentOutput}</ReactMarkdown>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex min-h-[400px] items-center justify-center rounded-lg border-2 border-dashed border-[#E5E7EB]">
-                      <div className="text-center px-4">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleCopyToClipboard}
+                            >
+                              Copy to Clipboard
+                            </Button>
+                          </div>
+                        ) : (
+                          /* EDIT MODE */
+                          <div className="flex items-center justify-between">
+                            {/* LEFT */}
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant={editViewMode === 'edit' ? 'default' : 'outline'}
+                                onClick={() => setEditViewMode('edit')}
+                              >
+                                Edit
+                              </Button>
+
+                              <Button
+                                size="sm"
+                                variant={editViewMode === 'preview' ? 'default' : 'outline'}
+                                onClick={() => setEditViewMode('preview')}
+                              >
+                                Preview
+                              </Button>
+                            </div>
+
+                            {/* RIGHT */}
+                            <div className="flex items-center gap-2">
+                              <Button size="sm" onClick={handleSaveEdit}>
+                                Save
+                              </Button>
+
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  setEditedOutput(currentOutput);
+                                  setIsEditing(false);
+                                  setEditViewMode('edit');
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* OUTPUT */}
+                        <div className="prose prose-sm max-w-none rounded-lg border border-[#E5E7EB] bg-white p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
+                          {isEditing ? (
+                            editViewMode === 'edit' ? (
+                              <Textarea
+                                value={editedOutput ?? ''}
+                                onChange={(e) => setEditedOutput(e.target.value)}
+                                className="min-h-[500px] font-mono text-sm"
+                              />
+                            ) : (
+                              <ReactMarkdown>{editedOutput}</ReactMarkdown>
+                            )
+                          ) : (
+                            <ReactMarkdown>{currentOutput}</ReactMarkdown>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex min-h-[400px] items-center justify-center rounded-lg border-2 border-dashed border-[#E5E7EB]">
                         <p className="text-sm text-[#9CA3AF]">
                           No analysis yet. Enter a transcript and click "Analyze Meeting".
                         </p>
                       </div>
-                    </div>
-                  )}
-                </TabsContent>
+                    )}
+                  </TabsContent>
 
-                <TabsContent value="history" className="mt-4">
-                  <div className="space-y-3">
-                    {isLoadingSessions ? (
-                      <div className="flex min-h-[400px] items-center justify-center">
-                        <Loader2 className="h-6 w-6 animate-spin text-[#9CA3AF]" />
-                      </div>
-                    ) : sessions.length === 0 ? (
-                      <div className="flex min-h-[400px] items-center justify-center rounded-lg border-2 border-dashed border-[#E5E7EB]">
-                        <div className="text-center px-4">
+                  {/* HISTORY TAB */}
+                  <TabsContent value="history" className="mt-4">
+                    <div className="space-y-3">
+                      {isLoadingSessions ? (
+                        <div className="flex min-h-[400px] items-center justify-center">
+                          <Loader2 className="h-6 w-6 animate-spin text-[#9CA3AF]" />
+                        </div>
+                      ) : sessions.length === 0 ? (
+                        <div className="flex min-h-[400px] items-center justify-center rounded-lg border-2 border-dashed border-[#E5E7EB]">
                           <p className="text-sm text-[#9CA3AF]">
-                            No sessions yet for this project. Analyze your first meeting to get started.
+                            No sessions yet for this project.
                           </p>
                         </div>
-                      </div>
-                    ) : (
+                      ) : (
                       <div className="max-h-[600px] space-y-3 overflow-y-auto">
                         {sessions.map((session) => (
                           <Card
                             key={session.id}
                             className="cursor-pointer transition-all duration-200 hover:border-[#3B82F6] hover:shadow-md"
                             onClick={() => {
-                              loadSession(session);
                               setSearchParams({ artifact: session.id });
+                              loadSession(session);
                             }}
                           >
                             <CardContent className="p-4">
@@ -501,11 +651,17 @@ export default function MeetingIntelligence() {
                                   <p className="text-xs text-[#9CA3AF]">
                                     {formatDate(session.created_at)}
                                   </p>
-                                  {session.meeting_type && (
-                                    <Badge variant="secondary" className="text-xs">
-                                      {session.meeting_type}
-                                    </Badge>
-                                  )}
+
+                                  <div className="flex gap-2">
+                                    {session.version > 1 && (
+                                      <Badge
+                                        variant="outline"
+                                        className="text-xs border-blue-500 text-blue-600"
+                                      >
+                                        v{session.version} · Edited
+                                      </Badge>
+                                    )}
+                                  </div>
                                 </div>
 
                                 {session.project_name && (

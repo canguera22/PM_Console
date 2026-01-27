@@ -448,7 +448,10 @@ const handleDrop = useCallback((e: React.DragEvent) => {
     )
   );
 
-  const [currentOutput, setCurrentOutput] = useState<string>(''); // keep for backward compatibility / history
+  const [currentOutput, setCurrentOutput] = useState<string>('');
+  type ResultsTab = 'current' | 'advisor' | 'history';
+  const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
+
   const [activeOutputName, setActiveOutputName] = useState<string>('');
 
   const [sessionHistory, setSessionHistory] = useState<DocumentationSession[]>([]);
@@ -980,31 +983,43 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
       target_timeline: session.target_timeline || '',
       epic_impact: session.epic_impact || '',
     });
-    setSelectedOutputs((session as any).selected_outputs || session.selected_outputs || []);
-    
-    const output = (session as any).output || session.output || '';
 
+    setSelectedOutputs(
+      (session as any).selected_outputs || session.selected_outputs || []
+    );
+
+    const output = (session as any).output || session.output || '';
     setCurrentOutput(output);
+
     const parsed = parseOutputsByMarker(output);
-    setOutputByType(
+    const sheets =
       Object.keys(parsed).length > 0
         ? parsed
-        : { Document: output }
-    );
-    setActiveOutputSheet(Object.keys(parsed)[0] || 'Document');
+        : { Document: output };
+
+    setOutputByType(sheets);
+    setActiveOutputSheet(Object.keys(sheets)[0] || 'Document');
 
     setEditableOutput(output);
-    setCurrentSessionId((session as any).id?.toString?.() ?? (session as any).id ?? null);
+    setCurrentSessionId(
+      (session as any).id?.toString?.() ?? (session as any).id ?? null
+    );
 
-    // Versioning (safe defaults)
     setCurrentArtifactVersion((session as any).version_number ?? 1);
     setLastModifiedBy((session as any).last_modified_by ?? 'agent');
 
     setEditingSheet(null);
-
     setAdvisorOutput('');
+
+    // 🔥 KEY UX FIXES
+    setActiveResultsTab('current');        // ← FORCE Current Documentation tab
+    setTimeout(() => {
+      setActiveOutputSheet(Object.keys(sheets)[0] || 'Document');
+    }, 0);
+
     toast.success('Session loaded');
   };
+
 
 
   return (
@@ -1059,7 +1074,7 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
               ) : (
                 <Card className="h-full">
                   <CardHeader className="flex flex-row items-center justify-between pb-3">
-                    <CardTitle className="text-base">Outputs</CardTitle>
+                    <CardTitle className="text-base">What Do You Need?</CardTitle>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -1579,6 +1594,7 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
           <div className="h-[calc(100vh-180px)]">
             <Card className="h-[calc(100vh-180px)]">
               <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg font-semibold text-[#111827]">
                     Documentation
@@ -1588,9 +1604,34 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                     v{currentArtifactVersion} · {lastModifiedBy === 'user' ? 'Edited' : 'Generated'}
                   </Badge>
                 </div>
-              </CardHeader>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRunAdvisorReview}
+                  disabled={isRunningAdvisor || !currentSessionId}
+                  className="flex items-center gap-2"
+                >
+                  {isRunningAdvisor ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Reviewing…
+                    </>
+                  ) : (
+                    <>
+                      <Lightbulb className="w-4 h-4" />
+                      Run PM Advisor
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardHeader>
               <CardContent>
-                <Tabs defaultValue="current" className="h-full">
+                <Tabs
+                  value={activeResultsTab}
+                  onValueChange={(val) => setActiveResultsTab(val as ResultsTab)}
+                  className="h-full"
+                >
                   <TabsList className="grid w-full grid-cols-3 bg-transparent border-b border-[#E5E7EB] rounded-none h-auto p-0">
                     <TabsTrigger value="current">Current Documentation</TabsTrigger>
                     <TabsTrigger value="advisor">Advisor Review</TabsTrigger>
@@ -1772,32 +1813,38 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                               onClick={() => loadSession(session)}
                             >
                               <CardHeader className="pb-3">
-                                <div className="flex items-start justify-between">
-                                  <CardTitle className="text-sm font-medium text-[#111827]">
-                                    {new Date(session.created_at).toLocaleDateString()} at{' '}
-                                    {new Date(session.created_at).toLocaleTimeString()}
-                                  </CardTitle>
-                                  <CheckCircle2 className="h-4 w-4 text-[#10B981]" />
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <CardTitle className="text-sm font-medium text-[#111827] truncate">
+                                      {session.input_name ?? 'Untitled Document'}
+                                    </CardTitle>
+
+                                    <p className="mt-0.5 text-xs text-[#9CA3AF]">
+                                      {new Date(session.created_at).toLocaleDateString()} at{' '}
+                                      {new Date(session.created_at).toLocaleTimeString()}
+                                    </p>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    {(session.version > 1 || session.last_modified_by === 'user') && (
+                                      <Badge
+                                        variant="outline"
+                                        className="text-xs border-blue-500 text-blue-600"
+                                      >
+                                        v{session.version ?? 1} · Edited
+                                      </Badge>
+                                    )}
+                                  </div>
                                 </div>
-                                <CardDescription className="line-clamp-2 text-xs text-[#6B7280]">
-                                  {(session.problem_statement || '').slice(0, 80)}...
+
+
+                                {/* TERTIARY — Short context */}
+                                <CardDescription className="mt-1 line-clamp-2 text-xs text-[#6B7280]">
+                                  {(session.problem_statement || '').slice(0, 80)}…
                                 </CardDescription>
                               </CardHeader>
-                              <CardContent className="pt-0">
-                                <div className="flex flex-wrap gap-1">
-                                  {(session.selected_outputs || []).slice(0, 3).map((output: string) => (
-                                    <Badge key={output} variant="secondary" className="text-xs">
-                                      {output.split(' ')[0]}
-                                    </Badge>
-                                  ))}
-                                  {(session.selected_outputs || []).length > 3 && (
-                                    <Badge variant="secondary" className="text-xs">
-                                      +{(session.selected_outputs || []).length - 3} more
-                                    </Badge>
-                                  )}
-                                </div>
-                              </CardContent>
                             </Card>
+
                           ))}
                         </div>
                       )}
