@@ -235,12 +235,17 @@ serve(async (req) => {
           artifact_name ||
           `Meeting Analysis - ${new Date().toLocaleDateString()}`,
         input_data: {
-          meeting_transcript,
-          meeting_type,
-          participants,
+          schema_version: 1,
+          input_mode: 'transcript',
+          input: {
+            meeting_transcript,
+            meeting_type,
+            participants,
+          },
         },
         output_data: output,
         metadata: {
+          input_schema_version: 1,
           meeting_type,
           participants,
           tokens_used: data.usage?.total_tokens,

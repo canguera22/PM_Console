@@ -20,6 +20,7 @@ import ReactMarkdown from 'react-markdown';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { useSearchParams } from 'react-router-dom';
+import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 
 
 export default function MeetingIntelligence() {
@@ -41,6 +42,8 @@ export default function MeetingIntelligence() {
   const [sessions, setSessions] = useState<MeetingSession[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [currentOutput, setCurrentOutput] = useState<string>('');
+  const [currentArtifactId, setCurrentArtifactId] = useState<string | null>(null);
+
 
 // 🔑 MAIN RESULTS TABS CONTROL
 type ResultsTab = 'current' | 'history';
@@ -56,7 +59,6 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
 
 
   //Editing
-  const [editingSheet, setEditingSheet] = useState<string | null>(null);
   type EditViewMode = 'edit' | 'preview';
   const [editViewMode, setEditViewMode] = useState<EditViewMode>('edit');
 
@@ -100,15 +102,17 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
 
   const artifactToMeetingSession = (a: ProjectArtifactRow): MeetingSession => {
     const input = a.input_data ?? {};
+    const nestedInput = (input.input ?? {}) as Record<string, unknown>;
     const metadata = (a.metadata ?? {}) as Record<string, any>;
 
     return {
       id: a.id,
       created_at: a.created_at,
-      meeting_type: (input.meeting_type as string) ?? null,
+      artifact_name: a.artifact_name,
+      meeting_type: (input.meeting_type as string) ?? (nestedInput.meeting_type as string) ?? null,
       project_name: a.project_name ?? null,
-      participants: (input.participants as string) ?? null,
-      transcript: (input.meeting_transcript as string) ?? '',
+      participants: (input.participants as string) ?? (nestedInput.participants as string) ?? null,
+      transcript: (input.meeting_transcript as string) ?? (nestedInput.meeting_transcript as string) ?? '',
       output: a.output_data ?? null,
       metadata,
       version: metadata.version ?? 1, 
@@ -181,6 +185,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     setIsAnalyzing(true);
 
     const effectiveProjectName = projectName?.trim() || activeProject.name;
+    const artifactName = `${effectiveProjectName} – ${new Date().toLocaleDateString()}`;
 
     console.log('👤 [User Action] Clicked "Analyze Meeting" button');
     console.log('📝 [Input Data]', {
@@ -193,6 +198,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     });
 
     try {
+      
       // Call the edge function (project_id REQUIRED)
       const result = await callAgentWithLogging(
         'Meeting Intelligence',
@@ -200,6 +206,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
         {
           project_id: activeProject.id,
           project_name: effectiveProjectName || undefined,
+          artifact_name: artifactName,
           meeting_transcript: transcript,
           meeting_type: meetingType || undefined,
           participants: participants || undefined,
@@ -212,17 +219,13 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
             meeting_transcript: transcript,
             meeting_type: meetingType || undefined,
             participants: participants || undefined,
+            artifact_name: artifactName,
           })
       );
 
       console.log('✨ [Success] Received AI-generated output', { outputLength: result.output.length });
       setCurrentOutput(result.output);
-
-      // Save to project_artifacts (new canonical store)
-      const artifactName =
-        meetingType?.trim()
-          ? `Meeting: ${meetingType.trim()}`
-          : 'Meeting: Analysis';
+      setCurrentArtifactId(result.artifact_id ?? null);
 
       console.log('💾 [Database] Saving to project_artifacts table...');
       console.log('💾 [Database] Saved successfully');
@@ -269,7 +272,16 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     try {
       const newVersion = currentVersion + 1;
 
-      await supabaseFetch(`/project_artifacts?id=eq.${artifactIdFromUrl}`, {
+      if (!currentArtifactId) {
+        toast({
+          title: 'Error',
+          description: 'No active session to save',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      await supabaseFetch(`/project_artifacts?id=eq.${currentArtifactId}`, {
         method: 'PATCH',
         body: JSON.stringify({
           output_data: editedOutput,
@@ -305,8 +317,9 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
 
 
   const loadSession = (session: MeetingSession) => {
-    // Core output
+    setCurrentArtifactId(session.id); 
     setCurrentOutput(session.output ?? '');
+
     
     // Reset editing state
     setEditedOutput(null);
@@ -637,45 +650,18 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                       ) : (
                       <div className="max-h-[600px] space-y-3 overflow-y-auto">
                         {sessions.map((session) => (
-                          <Card
+                          <SessionHistoryCard
                             key={session.id}
-                            className="cursor-pointer transition-all duration-200 hover:border-[#3B82F6] hover:shadow-md"
+                            title={session.artifact_name || session.project_name || 'Meeting Analysis'}
+                            timestamp={formatDate(session.created_at)}
+                            description={session.transcript ? `${session.transcript.substring(0, 100)}...` : undefined}
+                            badges={session.meeting_type ? [session.meeting_type] : []}
+                            rightBadge={session.version > 1 ? `v${session.version} · Edited` : undefined}
                             onClick={() => {
                               setSearchParams({ artifact: session.id });
                               loadSession(session);
                             }}
-                          >
-                            <CardContent className="p-4">
-                              <div className="space-y-2">
-                                <div className="flex items-start justify-between gap-2">
-                                  <p className="text-xs text-[#9CA3AF]">
-                                    {formatDate(session.created_at)}
-                                  </p>
-
-                                  <div className="flex gap-2">
-                                    {session.version > 1 && (
-                                      <Badge
-                                        variant="outline"
-                                        className="text-xs border-blue-500 text-blue-600"
-                                      >
-                                        v{session.version} · Edited
-                                      </Badge>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {session.project_name && (
-                                  <p className="font-medium text-sm text-[#111827]">
-                                    {session.project_name}
-                                  </p>
-                                )}
-
-                                <p className="line-clamp-2 text-sm text-[#6B7280]">
-                                  {(session.transcript || '').substring(0, 100)}...
-                                </p>
-                              </div>
-                            </CardContent>
-                          </Card>
+                          />
                         ))}
                       </div>
                     )}

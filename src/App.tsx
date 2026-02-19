@@ -2,14 +2,17 @@ import { RouterProvider } from "react-router-dom";
 import "./index.css";
 import { router } from "./routes";
 import { ActiveProjectProvider } from "./contexts/ActiveProjectContext";
+import { AuthProvider } from "./contexts/AuthContext";
 
 const App = () => {
   return (
-    <ActiveProjectProvider>
-      <div className="min-h-screen">
-        <RouterProvider router={router} />
-      </div>
-    </ActiveProjectProvider>
+    <AuthProvider>
+      <ActiveProjectProvider>
+        <div className="min-h-screen">
+          <RouterProvider router={router} />
+        </div>
+      </ActiveProjectProvider>
+    </AuthProvider>
   );
 };
 

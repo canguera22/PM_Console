@@ -1,0 +1,26 @@
+PROGRAM: Federal Subscriber Eligibility Verification
+
+OVERVIEW
+This federal benefits program serves millions of active subscribers nationwide. Federal regulations require ongoing verification that benefits are not paid to deceased individuals.
+
+DATA SOURCE
+
+* The authoritative source for deceased individual data is the NTIS Death Master File (DMF).
+* NTIS publishes an updated DMF dataset monthly.
+
+REQUIRED PROCESS
+
+1. A one-time historical load of the full NTIS DMF dataset must be performed at system initialization.
+2. After initial load, the system must perform a recurring monthly comparison of all active subscribers against the latest DMF data.
+3. The monthly DMF check must be executed on the SECOND BUSINESS DAY of each month.
+4. Results of each run must be stored and auditable.
+
+OUTPUTS
+
+* A report identifying matched subscribers (potential deceased matches)
+* A report summarizing total records scanned, matches found, and execution timestamp
+
+COMPLIANCE
+
+* All executions must be logged
+* Results must be retained for audit and reporting purposes

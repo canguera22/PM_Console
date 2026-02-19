@@ -1,0 +1,13 @@
+IMPLEMENTATION NOTES
+
+* The NTIS DMF file is delivered monthly via secure transfer.
+* File sizes may exceed several million records.
+* Initial historical load must be handled separately from monthly incremental checks.
+* Monthly checks must NOT reprocess historical data.
+* Execution timing must align with business operations and reporting cycles.
+* Reports must be available to operations and compliance teams.
+
+NON-GOALS
+
+* Real-time eligibility checks are out of scope.
+* Manual review workflows are handled outside this system.

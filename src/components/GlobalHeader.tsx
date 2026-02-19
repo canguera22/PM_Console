@@ -2,9 +2,23 @@ import { useNavigate } from 'react-router-dom';
 import { Home, LayoutDashboard } from 'lucide-react';
 import { ActiveProjectSelector } from '@/components/ActiveProjectSelector';
 import Logo from '@/assets/branding/product_workbench_logo.png';
+import { useAuth } from '@/contexts/AuthContext';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 
 const GlobalHeader = () => {
   const navigate = useNavigate();
+  const { user, signOut } = useAuth();
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      navigate('/login', { replace: true });
+    } catch (error) {
+      console.error('Failed to sign out:', error);
+      toast.error('Failed to sign out');
+    }
+  };
 
   return (
     <header className="bg-white border-b border-[#E5E7EB]">
@@ -45,6 +59,13 @@ const GlobalHeader = () => {
 
           {/* Active Project */}
           <ActiveProjectSelector />
+
+          <span className="hidden md:inline text-xs text-[#6B7280]">
+            {user?.email}
+          </span>
+          <Button variant="outline" size="sm" onClick={handleSignOut}>
+            Log out
+          </Button>
         </div>
       </div>
     </header>

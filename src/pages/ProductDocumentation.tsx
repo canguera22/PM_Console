@@ -21,6 +21,7 @@ import ReactMarkdown from 'react-markdown';
 import { callPMAdvisorAgent, fetchContextArtifacts, saveAdvisorReview } from '@/lib/pm-advisor';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
+import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import Papa from 'papaparse';
 import { supabase } from '@/lib/supabase';
 
@@ -64,8 +65,24 @@ const OUTPUT_LABEL_TO_KEY: Record<string, OutputKey> = {
   'Success Metrics / KPI Drafts': OUTPUT_KEYS.KPIS,
 };
 
+const OUTPUT_KEY_TO_LABEL: Record<OutputKey, string> = {
+  [OUTPUT_KEYS.PRD]: 'PRD',
+  [OUTPUT_KEYS.EPICS]: 'Epics',
+  [OUTPUT_KEYS.EPIC_IMPACT]: 'Epic Impact',
+  [OUTPUT_KEYS.USER_STORIES]: 'User Stories',
+  [OUTPUT_KEYS.ACCEPTANCE_CRITERIA]: 'Acceptance Criteria',
+  [OUTPUT_KEYS.OUT_OF_SCOPE]: 'Out of Scope',
+  [OUTPUT_KEYS.RISKS]: 'Risks & Mitigations',
+  [OUTPUT_KEYS.DEPENDENCIES]: 'Dependencies Mapping',
+  [OUTPUT_KEYS.KPIS]: 'Success Metrics / KPIs',
+};
+
 function getOutputKeyFromLabel(label: string): OutputKey | null {
   return OUTPUT_LABEL_TO_KEY[label] ?? null;
+}
+
+function getOutputLabel(key: string): string {
+  return OUTPUT_KEY_TO_LABEL[key as OutputKey] ?? key;
 }
 
 
@@ -249,22 +266,12 @@ export default function ProductDocumentation() {
       }),
     });
 
-        if (!editingSheet) {
-      toast.error('No active output sheet');
-      return;
-    }
+   const rebuiltOutputs = parseOutputsByMarker(editableOutput);
 
-    const updatedOutputs = {
-      ...outputByType,
-      [editingSheet]: editableOutput,
-    };
-
-    // ✅ Update tabbed outputs (this fixes editing)
-    setOutputByType(updatedOutputs);
-
-    // ✅ Keep full document in sync (advisor + legacy paths)
-    setCurrentOutput(
-      Object.values(updatedOutputs).join('\n\n')
+    setOutputByType(
+      Object.keys(rebuiltOutputs).length
+        ? rebuiltOutputs
+        : { Document: editableOutput }
     );
 
     setCurrentArtifactVersion(nextVersion);
@@ -273,6 +280,7 @@ export default function ProductDocumentation() {
 
     toast.success(`Saved version v${nextVersion}`);
     await loadSessionHistory();
+
 
   } catch (err) {
     console.error('Save failed:', err);
@@ -298,7 +306,6 @@ const [isParsingCsv, setIsParsingCsv] = useState(false);
 const [csvError, setCsvError] = useState<string | null>(null);
 const [isDragging, setIsDragging] = useState(false);
 const [outputByType, setOutputByType] = useState<Record<string, string>>({});
-const [activeOutputSheet, setActiveOutputSheet] = useState<string>('');
 
 
 const resetCsvState = () => {
@@ -497,6 +504,7 @@ const handleDrop = useCallback((e: React.DragEvent) => {
 
   const artifactToDocumentationSession = (a: ProjectArtifactRow): DocumentationSession => {
     const input = (a.input_data ?? {}) as Record<string, any>;
+    const nestedInput = (input.input ?? {}) as Record<string, any>;
     const metadata = (a.metadata ?? {}) as Record<string, any>;
     const version = metadata.version_number ?? 1;
     const modifiedBy = metadata.last_modified_by ?? 'agent';
@@ -507,23 +515,23 @@ const handleDrop = useCallback((e: React.DragEvent) => {
       id: a.id as any, // in case your DocumentationSession.id is typed as number; better to update it to string later
       created_at: a.created_at,
 
-      input_name: input.input_name ?? '',
-      problem_statement: input.problem_statement ?? '',
-      target_user_persona: input.target_user_persona ?? '',
-      business_goals: input.business_goals ?? '',
-      assumptions_constraints: input.assumptions_constraints ?? '',
-      functional_requirements: input.functional_requirements ?? '',
-      dependencies: input.dependencies ?? '',
+      input_name: input.input_name ?? a.artifact_name ?? '',
+      problem_statement: input.problem_statement ?? nestedInput.problem_statement ?? '',
+      target_user_persona: input.target_user_persona ?? nestedInput.target_user_persona ?? '',
+      business_goals: input.business_goals ?? nestedInput.business_goals ?? '',
+      assumptions_constraints: input.assumptions_constraints ?? nestedInput.assumptions_constraints ?? '',
+      functional_requirements: input.functional_requirements ?? nestedInput.functional_requirements ?? '',
+      dependencies: input.dependencies ?? nestedInput.dependencies ?? '',
 
-      non_functional_requirements: input.non_functional_requirements ?? '',
-      user_pain_points: input.user_pain_points ?? '',
-      competitive_context: input.competitive_context ?? '',
-      technical_constraints: input.technical_constraints ?? '',
-      success_metrics: input.success_metrics ?? '',
-      target_timeline: input.target_timeline ?? '',
-      epic_impact: input.epic_impact ?? '',
+      non_functional_requirements: input.non_functional_requirements ?? nestedInput.non_functional_requirements ?? '',
+      user_pain_points: input.user_pain_points ?? nestedInput.user_pain_points ?? '',
+      competitive_context: input.competitive_context ?? nestedInput.competitive_context ?? '',
+      technical_constraints: input.technical_constraints ?? nestedInput.technical_constraints ?? '',
+      success_metrics: input.success_metrics ?? nestedInput.success_metrics ?? '',
+      target_timeline: input.target_timeline ?? nestedInput.target_timeline ?? '',
+      epic_impact: input.epic_impact ?? nestedInput.epic_impact ?? '',
 
-      selected_outputs: input.selected_outputs ?? [],
+      selected_outputs: input.selected_outputs ?? nestedInput.selected_outputs ?? [],
       output: a.output_data ?? '',
       project_id: a.project_id ?? null,
       module_type: metadata.module_type ?? 'product_documentation',
@@ -623,7 +631,14 @@ function parseOutputsByMarker(raw: string): Record<string, string> {
   let buf: string[] = [];
 
   const flush = () => {
-    if (currentName) sections[currentName] = buf.join('\n').trim();
+    if (!currentName) return;
+
+    // 🔥 Strip top-level titles (# ...)
+    const cleaned = buf.filter(
+      (l) => !l.trim().match(/^#\s+/)
+    );
+
+    sections[currentName] = cleaned.join('\n').trim();
     buf = [];
   };
 
@@ -640,6 +655,16 @@ function parseOutputsByMarker(raw: string): Record<string, string> {
 
   return sections;
 }
+
+function buildCombinedOutput(outputs: Record<string, string>) {
+  return Object.entries(outputs)
+    .map(
+      ([key, content]) =>
+        `# ${key}\n\n${content.trim()}`
+    )
+    .join('\n\n---\n\n');
+}
+
   const isFormValid = () => {
   if (!formData.input_name.trim() || selectedOutputs.length === 0) return false;
 
@@ -711,11 +736,11 @@ const switchToCsvMode = () => {
 
   const normalizedOutputs = selectedOutputs;
   const basePayload = {
-  project_id: activeProject.id,           // 🔒 REQUIRED
+  project_id: activeProject.id,          
   project_name: activeProject.name,
   artifact_name: formData.input_name.trim(),
   input_mode: inputMode,
-  selected_outputs: normalizedOutputs,    // lowercase canonical
+  selected_outputs: normalizedOutputs,   
 };
 
 const payload =
@@ -753,7 +778,6 @@ const payload =
     });
 
 
-    setIsGenerating(true);
     console.log('👤 [User Action] Clicked "Generate Documentation" button');
     console.log('📝 [Input Data]', {
       problem_statement: formData.problem_statement.substring(0, 100) + '...',
@@ -769,12 +793,17 @@ const hasCsvInputFrontend =
 console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
 
     try {
+      type ProductDocumentationEdgeResult = {
+        output: string;
+        artifact_id?: string;
+      };
+
       const result = await callAgentWithLogging(
         'Product Documentation',
         'product-documentation',
         payload,
         async () => {
-          const { data, error } = await supabase.functions.invoke(
+          const { data, error } = await supabase.functions.invoke<ProductDocumentationEdgeResult>(
             'product-documentation',
             { body: payload }
           );
@@ -788,56 +817,26 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
         outputLength: result.output.length,
       });
 
-      // Save to project_artifacts
-      const artifactName = formData.input_name.trim();
+      // Artifact persistence is handled by the edge function.
+      // Use returned artifact_id to keep edit/advisor actions scoped to the latest run.
+      if (result.artifact_id) {
+        setCurrentSessionId(result.artifact_id);
+        setCurrentArtifactVersion(1);
+        setLastModifiedBy('agent');
+      }
 
-      const saved = await supabaseFetch<ProjectArtifactRow[]>('/project_artifacts', {
-        method: 'POST',
-        body: JSON.stringify({
-          project_id: activeProject.id,
-          project_name: activeProject.name,
-          artifact_type: 'product_documentation',
-          artifact_name: artifactName,
-          input_data:
-            inputMode === 'jira_csv'
-              ? {
-                  input_name: formData.input_name,
-                  input_mode: 'jira_csv',
-                  selected_outputs: selectedOutputs,
-                  csv: {
-                    filename: csvFile?.name ?? null,
-                    row_count: parsedCsv?.rowCount ?? null,
-                  },
-                }
-              : {
-                  input_name: formData.input_name,
-                  input_mode: 'manual',
-                  selected_outputs: selectedOutputs,
-                  input: { ...formData },
-                },
-          output_data: result.output,
-          metadata: { module_type: 'product_documentation' },
-          status: 'active',
-        }),
-      });
 
       // Sync outputs
-      setCurrentOutput(result.output);
-
       const parsed = parseOutputsByMarker(result.output);
+
       const sheetMap =
         Object.keys(parsed).length > 0
           ? parsed
-          : { [selectedOutputs[0] || 'Output']: result.output };
+          : { Document: result.output };
 
       setOutputByType(sheetMap);
-      setActiveOutputSheet(Object.keys(sheetMap)[0] || '');
+      setCurrentOutput('');
 
-      setAdvisorOutput('');
-
-      if (saved?.length) {
-        setCurrentSessionId(saved[0].id);
-      }
 
       toast.success('Documentation generated successfully!');
       await loadSessionHistory();
@@ -856,12 +855,13 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
   const handleRunAdvisorReview = async () => {
     setAdvisorError(null);
 
-    if (!currentOutput) {
+    if (!Object.keys(outputByType).length) {
       const errorMsg = 'No documentation to review. Generate documentation first.';
       setAdvisorError(errorMsg);
       toast.error(errorMsg);
       return;
     }
+
 
     if (!activeProject) {
       const errorMsg = 'No active project selected';
@@ -877,10 +877,7 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
       console.log('🔍 [Context] Fetching context artifacts from other modules...');
       const contextArtifacts = await fetchContextArtifacts(activeProject.id);
 
-      const outputToReview =
-  (activeOutputSheet && outputByType[activeOutputSheet])
-    ? outputByType[activeOutputSheet]
-    : currentOutput;
+      const outputToReview = buildCombinedOutput(outputByType);
 
       const advisorPayload = {
         artifact_output: outputToReview,
@@ -889,7 +886,7 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
         project_name: activeProject.name,
         source_session_table: 'project_artifacts',
         source_session_id: currentSessionId,
-        artifact_type: activeOutputSheet || 'Product Documentation',
+        artifact_type: 'Product Documentation',
         selected_outputs: selectedOutputs,
         context_artifacts: contextArtifacts,
       };
@@ -998,7 +995,6 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
         : { Document: output };
 
     setOutputByType(sheets);
-    setActiveOutputSheet(Object.keys(sheets)[0] || 'Document');
 
     setEditableOutput(output);
     setCurrentSessionId(
@@ -1010,12 +1006,7 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
 
     setEditingSheet(null);
     setAdvisorOutput('');
-
-    // 🔥 KEY UX FIXES
-    setActiveResultsTab('current');        // ← FORCE Current Documentation tab
-    setTimeout(() => {
-      setActiveOutputSheet(Object.keys(sheets)[0] || 'Document');
-    }, 0);
+    setActiveResultsTab('current'); 
 
     toast.success('Session loaded');
   };
@@ -1505,13 +1496,16 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                               </>
                             ) : (
                               <div className="flex items-center justify-between gap-3">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <FileText className="h-5 w-5 text-[#3B82F6]" />
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-medium text-[#111827] truncate">
+                                <div className="flex items-center gap-2 min-w-0 w-full">
+                                  <FileText className="h-5 w-5 flex-shrink-0 text-[#3B82F6]" />
+                                  <div className="min-w-0 w-full overflow-hidden">
+                                    <p
+                                      className="text-sm font-medium text-[#111827] truncate"
+                                      title={csvFile.name}
+                                    >
                                       {csvFile.name}
                                     </p>
-                                    <p className="text-xs text-[#6B7280]">
+                                    <p className="text-xs text-[#6B7280] truncate">
                                       {isParsingCsv
                                         ? 'Parsing CSV…'
                                         : parsedCsv
@@ -1520,7 +1514,6 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                                     </p>
                                   </div>
                                 </div>
-
                                 <button
                                   type="button"
                                   onClick={clearCsvFile}
@@ -1546,7 +1539,7 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                               <p className="text-xs font-medium text-[#111827] mb-2">
                                 Detected columns
                               </p>
-                              <p className="text-xs text-[#6B7280]">
+                              <p className="text-xs text-[#6B7280] break-words whitespace-normal">
                                 {parsedCsv.headers.slice(0, 8).join(', ')}
                                 {parsedCsv.headers.length > 8 ? '…' : ''}
                               </p>
@@ -1632,127 +1625,124 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                   onValueChange={(val) => setActiveResultsTab(val as ResultsTab)}
                   className="h-full"
                 >
-                  <TabsList className="grid w-full grid-cols-3 bg-transparent border-b border-[#E5E7EB] rounded-none h-auto p-0">
-                    <TabsTrigger value="current">Current Documentation</TabsTrigger>
-                    <TabsTrigger value="advisor">Advisor Review</TabsTrigger>
-                    <TabsTrigger value="history">Session History</TabsTrigger>
+                  <TabsList
+                    className="
+                      flex w-full flex-wrap gap-1
+                      bg-transparent border-b border-[#E5E7EB]
+                      rounded-none p-0
+                    "
+                  >
+                    <TabsTrigger
+                    value="current"
+                    className="truncate text-sm sm:text-base"
+                  >
+                    Current Documentation
+                  </TabsTrigger>
+
+                  <TabsTrigger
+                    value="advisor"
+                    className="truncate text-sm sm:text-base"
+                  >
+                    Advisor Review
+                  </TabsTrigger>
+
+                  <TabsTrigger
+                    value="history"
+                    className="truncate text-sm sm:text-base"
+                  >
+                    Session History
+                  </TabsTrigger>
+
                   </TabsList>
 
                   <TabsContent value="current" className="mt-4">
                   {Object.keys(outputByType || {}).length > 0 ? (
-                    <div className="space-y-4">
-                      {/* Output Sheets Tabs */}
-                      <Tabs
-                        value={activeOutputSheet || Object.keys(outputByType)[0]}
-                        onValueChange={setActiveOutputSheet}
-                      >
-                        <TabsList className="flex flex-wrap justify-start gap-2 bg-transparent p-0">
-                          {Object.keys(outputByType).map((key) => (
-                            <TabsTrigger key={key} value={key}>
-                              {key}
-                            </TabsTrigger>
-                          ))}
-                        </TabsList>
+                    <div className="space-y-6">
+                      {/* GLOBAL ACTION BAR */}
+                      <div className="flex justify-end gap-2 sticky top-0 bg-white z-10 pb-2">
+                        {!editingSheet ? (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setEditableOutput(buildCombinedOutput(outputByType));
+                                setEditingSheet('__ALL__');
+                                setEditViewMode('edit');
+                              }}
+                            >
+                              Edit
+                            </Button>
 
-                        {Object.entries(outputByType).map(([key, md]) => (
-                          <TabsContent key={key} value={key} className="mt-4">
-                            <div className="flex justify-end gap-2">
-                              {editingSheet !== key? (
-                                <>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => {
-                                      setEditableOutput(md);
-                                      setEditingSheet(key);
-                                      setEditViewMode('edit');
-                                    }}
-                                  >
-                                    Edit
-                                  </Button>
-
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => navigator.clipboard.writeText(md)}
-                                  >
-                                    <Copy className="mr-2 h-4 w-4" />
-                                    Copy {key}
-                                  </Button>
-                                </>
-                              ) : (
-                                <>
-                              {/* Edit / Preview toggle */}
-                              <div className="flex items-center gap-2 mr-auto">
-                                <Button
-                                  size="sm"
-                                  variant={editViewMode === 'edit' ? 'default' : 'outline'}
-                                  onClick={() => setEditViewMode('edit')}
-                                >
-                                  Edit
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant={editViewMode === 'preview' ? 'default' : 'outline'}
-                                  onClick={() => setEditViewMode('preview')}
-                                >
-                                  Preview
-                                </Button>
-                              </div>
-
-                              <Button size="sm" onClick={handleSaveEdits}>
-                                Save
-                              </Button>
-
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                navigator.clipboard.writeText(buildCombinedOutput(outputByType))
+                              }
+                            >
+                              <Copy className="mr-2 h-4 w-4" />
+                              Copy All
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 mr-auto">
                               <Button
-                                variant="ghost"
                                 size="sm"
-                                onClick={() => {
-                                  if (editingSheet) {
-                                    setEditableOutput(outputByType[editingSheet] || '');
-                                  }
-                                  setEditingSheet(null);
-                                  setEditViewMode('edit');
-                                }}
+                                variant={editViewMode === 'edit' ? 'default' : 'outline'}
+                                onClick={() => setEditViewMode('edit')}
                               >
-                                Cancel
+                                Edit
                               </Button>
-                            </>
-                              )}
+                              <Button
+                                size="sm"
+                                variant={editViewMode === 'preview' ? 'default' : 'outline'}
+                                onClick={() => setEditViewMode('preview')}
+                              >
+                                Preview
+                              </Button>
                             </div>
-                            <ScrollArea className="h-[calc(100vh-420px)]">
-                              <div className="prose prose-sm max-w-none pr-4 dark:prose-invert">
-                                {editingSheet === key ? (
-                                  editViewMode === 'edit' ? (
-                                    <Textarea
-                                      value={editableOutput}
-                                      onChange={(e) => setEditableOutput(e.target.value)}
-                                      className="min-h-[500px] w-full font-mono text-sm border-[#E5E7EB]"
-                                    />
-                                  ) : (
-                                    <ReactMarkdown>{editableOutput}</ReactMarkdown>
-                                  )
-                                ) : (
-                                  <ReactMarkdown>{md}</ReactMarkdown>
-                                )}
-                              </div>
-                            </ScrollArea>
-                          </TabsContent>
-                        ))}
-                      </Tabs>
-                    </div>
-                  ) : currentOutput ? (
-                    // Backward compatibility: if you still have only a single string output
-                    <div className="space-y-4">
-                      <div className="flex justify-end">
-                        <Button variant="outline" size="sm" onClick={handleCopyToClipboard}>
-                          <Copy className="mr-2 h-4 w-4" />
-                          Copy to Clipboard
-                        </Button>
+
+                            <Button size="sm" onClick={handleSaveEdits}>
+                              Save
+                            </Button>
+
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setEditingSheet(null);
+                                setEditViewMode('edit');
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                          </>
+                        )}
                       </div>
-                      <ScrollArea className="h-[calc(100vh-360px)]">
-                        <div className="prose prose-sm max-w-none pr-4 dark:prose-invert">
-                          <ReactMarkdown>{currentOutput}</ReactMarkdown>
+
+                      {/* OUTPUT CONTENT */}
+                      <ScrollArea className="h-[calc(100vh-420px)]">
+                        <div className="prose prose-sm max-w-none pr-4">
+                          {editingSheet ? (
+                            editViewMode === 'edit' ? (
+                              <Textarea
+                                value={editableOutput}
+                                onChange={(e) => setEditableOutput(e.target.value)}
+                                className="min-h-[600px] w-full font-mono text-sm"
+                              />
+                            ) : (
+                              <ReactMarkdown>{editableOutput}</ReactMarkdown>
+                            )
+                          ) : (
+                            Object.entries(outputByType).map(([key, md]) => (
+                              <div key={key} className="mb-10">
+                                <h2 className="text-xl font-semibold mb-3">{key}</h2>
+                                <ReactMarkdown>{md}</ReactMarkdown>
+                              </div>
+                            ))
+                          )}
                         </div>
                       </ScrollArea>
                     </div>
@@ -1806,45 +1796,20 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                         </div>
                       ) : (
                         <div className="space-y-3 pr-4">
-                          {sessionHistory.map((session: any) => (
-                            <Card
+                          {sessionHistory.map((session: DocumentationSession) => (
+                            <SessionHistoryCard
                               key={session.id}
-                              className="cursor-pointer transition-all duration-200 hover:border-[#3B82F6] hover:shadow-md"
+                              title={session.input_name || 'Untitled Document'}
+                              timestamp={`${new Date(session.created_at).toLocaleDateString()} at ${new Date(session.created_at).toLocaleTimeString()}`}
+                              description={session.problem_statement ? `${session.problem_statement.slice(0, 80)}...` : undefined}
+                              badges={(session.selected_outputs ?? []).map((outputKey) => getOutputLabel(outputKey))}
+                              rightBadge={
+                                session.version_number > 1 || session.last_modified_by === 'user'
+                                  ? `v${session.version_number ?? 1} · Edited`
+                                  : undefined
+                              }
                               onClick={() => loadSession(session)}
-                            >
-                              <CardHeader className="pb-3">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <CardTitle className="text-sm font-medium text-[#111827] truncate">
-                                      {session.input_name ?? 'Untitled Document'}
-                                    </CardTitle>
-
-                                    <p className="mt-0.5 text-xs text-[#9CA3AF]">
-                                      {new Date(session.created_at).toLocaleDateString()} at{' '}
-                                      {new Date(session.created_at).toLocaleTimeString()}
-                                    </p>
-                                  </div>
-
-                                  <div className="flex items-center gap-2 flex-shrink-0">
-                                    {(session.version > 1 || session.last_modified_by === 'user') && (
-                                      <Badge
-                                        variant="outline"
-                                        className="text-xs border-blue-500 text-blue-600"
-                                      >
-                                        v{session.version ?? 1} · Edited
-                                      </Badge>
-                                    )}
-                                  </div>
-                                </div>
-
-
-                                {/* TERTIARY — Short context */}
-                                <CardDescription className="mt-1 line-clamp-2 text-xs text-[#6B7280]">
-                                  {(session.problem_statement || '').slice(0, 80)}…
-                                </CardDescription>
-                              </CardHeader>
-                            </Card>
-
+                            />
                           ))}
                         </div>
                       )}

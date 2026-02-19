@@ -26,6 +26,9 @@ export type OutputType = typeof OUTPUT_TYPES[number];
 export interface ReleaseGenerationInput {
   csv_data: string;
   selected_outputs: OutputType[];
+  project_id: string;
+  project_name?: string;
+  artifact_name?: string;
   release_name?: string;
   target_audience?: string;
   known_risks?: string;
@@ -34,6 +37,7 @@ export interface ReleaseGenerationInput {
 export interface ReleaseGenerationResult {
   output: string;
   session_id?: string;
+  artifact_id?: string;
 }
 
 export interface ParsedCSV {

@@ -1,6 +1,7 @@
 export interface MeetingSession {
   id: string;
   created_at: string;
+  artifact_name?: string | null;
   meeting_type: string | null;
   project_name: string | null;
   participants: string | null;

@@ -351,7 +351,7 @@ const toggleSection = (type: string) => {
                 </h1>
               </div>
               <p className="text-sm text-[#6B7280]">
-                All artifacts for the {activeProject?.name || 'Unknown Project'} project are cound here.
+                All artifacts for the {activeProject?.name || 'Unknown Project'} project are found here.
               </p>
             </div>
           </div>

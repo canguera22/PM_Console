@@ -14,7 +14,7 @@ A comprehensive product management toolkit powered by AI agents. Create meeting 
 
 - Node.js 18+ and npm
 - A Supabase account ([sign up free](https://supabase.com))
-- ElevenLabs AI Agent API access (for agent functions)
+- OpenAI API access (for edge function inference)
 
 ## 🛠️ Setup
 
@@ -71,7 +71,9 @@ supabase db push
 This creates:
 - `projects` table (UUID primary key)
 - `project_artifacts` table (stores all generated artifacts)
-- Demo-open RLS policies (replace with Firebase auth later)
+- `project_documents` table (uploaded context docs + extracted text)
+- `project-documents` storage bucket + policies
+- Auth + membership-ready RLS policies
 - Helper views for latest/reviewed artifacts
 - Demo project seed data
 
@@ -80,8 +82,8 @@ This creates:
 Each AI agent runs as a Supabase Edge Function. Deploy them:
 
 ```bash
-# Set ElevenLabs API key as secret
-supabase secrets set ELEVENLABS_API_KEY=your-api-key-here
+# Set OpenAI key as secret
+supabase secrets set OPENAI_API_KEY=your-api-key-here
 
 # Deploy all functions
 supabase functions deploy meeting-intelligence
@@ -91,11 +93,10 @@ supabase functions deploy prioritization
 supabase functions deploy pm-advisor
 ```
 
-**Get your ElevenLabs API key:**
-- Go to [ElevenLabs Dashboard](https://elevenlabs.io/app/conversational-ai)
-- Create AI agents for each module (Meeting Intelligence, Product Documentation, etc.)
-- Copy Agent IDs from each agent's settings
-- Update agent IDs in corresponding edge function files
+**Get your OpenAI API key:**
+- Go to [OpenAI API Keys](https://platform.openai.com/api-keys)
+- Create a new secret key
+- Store it in Supabase via `supabase secrets set OPENAI_API_KEY=...`
 
 ### 5. Run Development Server
 
@@ -110,13 +111,14 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 After setup, verify everything works:
 
 ### Database
-- [ ] Tables created: `projects`, `project_artifacts`
+- [ ] Tables created: `projects`, `project_artifacts`, `project_documents`
+- [ ] Storage bucket exists: `project-documents`
 - [ ] Demo project exists: Query `SELECT * FROM projects;`
 - [ ] RLS policies active: `SELECT * FROM pg_policies WHERE tablename = 'project_artifacts';`
 
 ### Edge Functions
 - [ ] All 5 functions deployed successfully
-- [ ] `ELEVENLABS_API_KEY` secret is set: `supabase secrets list`
+- [ ] `OPENAI_API_KEY` secret is set: `supabase secrets list`
 - [ ] Functions respond: Test with curl or Postman
 
 ### Frontend
@@ -170,7 +172,8 @@ pm-console/
 │   │   └── pm-advisor/
 │   └── migrations/
 │       ├── 20250118000000_create_project_artifacts.sql
-│       └── 20250118000001_demo_setup.sql
+│       ├── 20250118000001_demo_setup.sql
+│       └── 20260219000000_create_project_documents.sql
 ├── .env.example                     # Environment variables template
 ├── .env.local                       # Your actual config (gitignored)
 ├── package.json                     # npm dependencies
@@ -179,32 +182,26 @@ pm-console/
 
 ## 🔐 Security Notes
 
-### Current State (Demo-Ready)
-- **RLS Policies**: Wide open for `anon` and `authenticated` roles
-- **Purpose**: Easy testing without authentication
-- **WARNING**: Do NOT use in production with real data
+### Current State
+- Supabase Auth is used end-to-end (email/password).
+- App routes are auth-gated (`/login`, `/signup` are public; app routes require auth).
+- RBAC model is `owner` + `member`.
+- RLS uses project ownership/membership checks across:
+  - `projects`
+  - `project_members`
+  - `project_artifacts`
+  - `project_documents`
+  - `storage.objects` for `project-documents`
 
-### Production Deployment
-Replace demo-open RLS policies with proper authentication:
+### Invite-Only Mode
+- In Supabase Dashboard, disable open signups:
+  - Auth → Providers → Email → turn off public signups.
+- Owners can then invite/assign users through admin workflows.
 
-1. **Integrate Firebase Authentication**
-   - Add Firebase SDK to frontend
-   - Create sign-up/sign-in flows
-   - Store user IDs in Supabase
-
-2. **Update RLS Policies**
-   ```sql
-   -- Example: User can only access their own projects
-   CREATE POLICY "Users can view own projects"
-     ON projects FOR SELECT
-     USING (auth.uid() = user_id);
-   ```
-
-3. **Add User Column**
-   ```sql
-   ALTER TABLE projects ADD COLUMN user_id UUID REFERENCES auth.users(id);
-   ALTER TABLE project_artifacts ADD COLUMN user_id UUID REFERENCES auth.users(id);
-   ```
+### Existing Project Backfill
+- Migration `20260219001000_enable_auth_rbac.sql` auto-assigns existing projects
+  to `conradanguera@gmail.com` **if that auth user already exists**.
+- Create that user in Supabase Auth first if needed.
 
 ## 🚢 Deployment
 
@@ -232,7 +229,7 @@ Replace demo-open RLS policies with proper authentication:
 ### Data Flow
 
 ```
-User Input → Frontend Page → Agent Library → Edge Function → ElevenLabs AI Agent
+User Input → Frontend Page → Agent Library → Supabase Edge Function → OpenAI API
                                                                       ↓
                                                               Structured Output
                                                                       ↓
@@ -350,7 +347,7 @@ MIT License - see LICENSE file for details
 
 ## 🎯 Roadmap
 
-- [ ] Firebase Authentication integration
+- [x] Supabase Authentication integration
 - [ ] Production-ready RLS policies
 - [ ] User profile management
 - [ ] Team collaboration features
@@ -362,4 +359,4 @@ MIT License - see LICENSE file for details
 
 ---
 
-Built with ❤️ using React, TypeScript, Supabase, and ElevenLabs AI Agents
+Built with React, TypeScript, Supabase, and OpenAI.

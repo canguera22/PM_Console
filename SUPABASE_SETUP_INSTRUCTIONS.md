@@ -37,11 +37,11 @@ VITE_SUPABASE_ANON_KEY=your_actual_anon_public_key_here
 The application expects the following tables in your Supabase database:
 
 - `projects` - Store project information
-- `meeting_sessions` - Store meeting intelligence outputs
-- `documentation_sessions` - Store product documentation outputs
-- `release_sessions` - Store release communications outputs
-- `prioritization_sessions` - Store WSJF prioritization outputs
-- `advisor_sessions` - Store PM advisor review outputs
+- `project_artifacts` - Store all generated artifacts from every module
+- `project_documents` - Store uploaded context documents + extracted text
+
+And the following storage bucket:
+- `project-documents` - Store uploaded files for project context
 
 ### Check if Tables Exist
 
@@ -161,6 +161,28 @@ supabase secrets set OPENAI_API_KEY=your_openai_api_key --project-ref aziandtcip
 - Anon key is set correctly in `.env`
 - Edge functions are deployed: `supabase functions list --project-ref aziandtcipmaphviocgz`
 - OPENAI_API_KEY secret is set
+
+---
+
+## 🔐 Authentication + Access Control
+
+This app now uses Supabase Auth (email/password) with project-level RBAC.
+
+- Roles: `owner`, `member`
+- Owners can assign project members
+- Members can read/write project artifacts and documents
+- All app routes are auth-protected except `/login` and `/signup`
+
+### Invite-only setup
+
+1. Open Supabase Dashboard → **Authentication** → **Providers** → **Email**
+2. Disable public signups (invite-only mode)
+3. Create/invite users from Auth dashboard or admin flow
+
+### Existing project assignment
+
+Migration `20260219001000_enable_auth_rbac.sql` assigns existing projects
+to `conradanguera@gmail.com` if that auth user exists at migration time.
 
 ### Error: "Table does not exist"
 

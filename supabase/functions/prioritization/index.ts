@@ -252,15 +252,22 @@ ${projectDocsContext}
           artifact_name ??
           `WSJF Prioritization – ${new Date().toLocaleDateString()}`,
         input_data: {
-          initiative_name,
-          effort_field_name,
-          max_score_per_factor,
-          normalize_scores,
+          schema_version: 1,
+          input_mode: 'csv',
           selected_outputs,
-          top_n_items,
+          input: {
+            initiative_name,
+            effort_field_name,
+            max_score_per_factor,
+            normalize_scores,
+            top_n_items,
+            default_effort_scale,
+            notes_context,
+          },
         },
         output_data: output,
         metadata: {
+          input_schema_version: 1,
           model: 'WSJF',
           tokens_used: completion.usage?.total_tokens,
           duration_ms: durationMs,

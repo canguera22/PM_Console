@@ -6,16 +6,16 @@ extra_search_path = ["public", "extensions"]
 max_rows = 1000
 
 [functions.meeting-intelligence]
-verify_jwt = false
+verify_jwt = true
 
 [functions.product-documentation]
-verify_jwt = false
+verify_jwt = true
 
 [functions.release-communications]
-verify_jwt = false
+verify_jwt = true
 
 [functions.prioritization]
-verify_jwt = false
+verify_jwt = true
 
 [functions.pm-advisor]
-verify_jwt = false
+verify_jwt = true

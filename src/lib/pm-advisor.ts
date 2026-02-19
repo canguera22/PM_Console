@@ -1,4 +1,5 @@
 import { supabase, supabaseFetch } from './supabase';
+import { getFunctionErrorMessage } from './function-errors';
 
 export interface ContextArtifacts {
   documentation_sessions: any | null;
@@ -33,7 +34,11 @@ export async function callPMAdvisorAgent(input: PMAdvisorInput): Promise<PMAdvis
 
   if (error) {
     console.error('Error calling pm-advisor edge function:', error);
-    throw new Error(error.message || 'Failed to get PM advisor feedback');
+    const message = await getFunctionErrorMessage(
+      error,
+      'Failed to get PM advisor feedback'
+    );
+    throw new Error(message);
   }
 
   return { output: data.output };

@@ -22,6 +22,7 @@ import ReactMarkdown from 'react-markdown';
 import Papa from 'papaparse';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
+import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import {
   PRIORITIZATION_MODELS,
   OUTPUT_TYPES,
@@ -162,6 +163,25 @@ const [advisorError, setAdvisorError] = useState<string | null>(null);
 
 // Error state
 const [error, setError] = useState<string | null>(null);
+
+const getSessionSelectedOutputs = (session: ProjectArtifact): string[] => {
+  const inputData = (session.input_data ?? {}) as Record<string, unknown>;
+  const value = inputData.selected_outputs;
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+};
+
+const getSessionTitle = (session: ProjectArtifact): string => {
+  const inputData = (session.input_data ?? {}) as Record<string, unknown>;
+  const input = (inputData.input ?? {}) as Record<string, unknown>;
+  const initiativeName = input.initiative_name;
+  if (typeof session.artifact_name === 'string' && session.artifact_name.trim()) {
+    return session.artifact_name.trim();
+  }
+  if (typeof initiativeName === 'string' && initiativeName.trim()) {
+    return initiativeName.trim();
+  }
+  return 'Prioritization Run';
+};
 
 // Load session history
 const loadSessions = async () => {
@@ -504,6 +524,9 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
           csv_content: csvContent,
           project_id: activeProject.id,
           project_name: activeProject.name,
+          artifact_name:
+            (initiativeName && initiativeName.trim()) ||
+            `WSJF Prioritization - ${new Date().toLocaleDateString()}`,
           initiative_name: initiativeName || undefined,
           default_effort_scale: defaultEffortScale || undefined,
           notes_context: notesContext || undefined,
@@ -619,9 +642,22 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
 
   // Load Session
   const loadSession = (session: ProjectArtifact) => {
+  const inputData = (session.input_data ?? {}) as Record<string, unknown>;
+  const input = (inputData.input ?? {}) as Record<string, unknown>;
+
   setCurrentArtifactId(session.id);
   setCurrentOutput(session.output_data ?? null);
   setAdvisorOutput(session.advisor_feedback ?? '');
+  setSelectedOutputs(getSessionSelectedOutputs(session) as OutputType[]);
+  setInitiativeName(
+    typeof input.initiative_name === 'string' ? input.initiative_name : ''
+  );
+  setDefaultEffortScale(
+    typeof input.default_effort_scale === 'string' ? input.default_effort_scale : ''
+  );
+  setNotesContext(
+    typeof input.notes_context === 'string' ? input.notes_context : ''
+  );
 };
 
 
@@ -1590,50 +1626,17 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                   ) : (
                     <div className="max-h-[600px] space-y-3 overflow-y-auto">
                       {sessions.map((session) => (
-                        <Card
+                        <SessionHistoryCard
                           key={session.id}
-                          className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
+                          title={getSessionTitle(session)}
+                          timestamp={formatDate(session.created_at)}
+                          badges={getSessionSelectedOutputs(session)}
                           onClick={() => {
                             loadSession(session);
                             setActiveTab('current');
                             setSearchParams({ artifact: session.id });
                           }}
-                        >
-                          <CardContent className="p-4">
-                            <div className="space-y-2">
-                              <div className="flex items-start justify-between gap-2">
-                                <p className="text-xs text-muted-foreground">
-                                  {formatDate(session.created_at)}
-                                </p>
-
-                                {session.metadata?.csv_row_count && (
-                                  <Badge variant="secondary" className="text-xs">
-                                    {session.metadata.csv_row_count} items
-                                  </Badge>
-                                )}
-                              </div>
-
-                              {session.artifact_name && (
-                                <p className="font-medium text-sm">{session.artifact_name}</p>
-                              )}
-
-                              {session.metadata?.selected_outputs?.length > 0 && (
-                                <div className="flex flex-wrap gap-1">
-                                  {session.metadata.selected_outputs.slice(0, 3).map((output) => (
-                                    <Badge key={output} variant="outline" className="text-xs">
-                                      {output}
-                                    </Badge>
-                                  ))}
-                                  {session.input_data.selected_outputs.length > 3 && (
-                                    <Badge variant="outline" className="text-xs">
-                                      +{session.input_data.selected_outputs.length - 3}
-                                    </Badge>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </CardContent>
-                        </Card>
+                        />
                       ))}
                     </div>
                   )}

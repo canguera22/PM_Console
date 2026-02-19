@@ -573,13 +573,18 @@ serve(async (req) => {
             artifact_name ||
             `Release Notes - ${new Date().toLocaleDateString()}`,
           input_data: {
-            release_name,
-            target_audience,
-            known_risks,
+            schema_version: 1,
+            input_mode: 'csv',
             selected_outputs: selectedOutputs,
+            input: {
+              release_name,
+              target_audience,
+              known_risks,
+            },
           },
           output_data: output,
           metadata: {
+            input_schema_version: 1,
             tokens_used: data.usage?.total_tokens,
             duration_ms: duration,
           },

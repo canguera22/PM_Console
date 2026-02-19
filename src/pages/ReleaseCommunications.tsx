@@ -37,6 +37,7 @@ import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 ///import { fetchContextArtifacts } from '@/lib/context-artifacts';
 import { callPMAdvisorAgent } from '@/lib/pm-advisor';
+import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 
 
 // project_artifacts row shape (based on your schema)
@@ -62,49 +63,45 @@ type OutputSection = {
   content: string;   // markdown for that section
 };
 
-function splitAgentOutputIntoSections(
+
+function buildOutputSections(
   output: string,
-  preferredTitles: string[] = []
+  selectedOutputs: OutputType[]
 ): OutputSection[] {
-  if (!output || !output.trim()) return [];
+  if (!output) return [];
 
-  // Split on H1 headers, preserving them
-  const matches = [...output.matchAll(/^#\s+.+$/gm)];
-
-  // If there are no H1s, treat entire output as one section
-  if (matches.length === 0) {
+  // 🔒 SINGLE OUTPUT → NO TABS
+  if (selectedOutputs.length <= 1) {
     return [
       {
         id: '0',
-        title: preferredTitles[0] ?? 'Output',
+        title: selectedOutputs[0] ?? 'Output',
         content: output.trim(),
       },
     ];
   }
 
-  const sections: OutputSection[] = [];
+  // MULTI OUTPUT → split by exact output headers
+  return selectedOutputs.map((title, index) => {
+    const header = `# ${title}`;
+    const start = output.indexOf(header);
 
-  for (let i = 0; i < matches.length; i++) {
-    const start = matches[i].index!;
-    const end = matches[i + 1]?.index ?? output.length;
+    if (start === -1) return null;
 
-    const block = output.slice(start, end).trim();
-    const firstLine = block.split('\n')[0];
-    const title = firstLine.replace(/^#\s+/, '').trim();
+    const nextHeaderIndex = selectedOutputs
+      .slice(index + 1)
+      .map((t) => output.indexOf(`# ${t}`, start + 1))
+      .find((i) => i !== -1);
 
-    sections.push({
-      id: String(i),
+    const end = nextHeaderIndex ?? output.length;
+
+    return {
+      id: String(index),
       title,
-      content: block,
-    });
-  }
-
-  return sections;
+      content: output.slice(start, end).trim(),
+    };
+  }).filter(Boolean) as OutputSection[];
 }
-
-
-
-
 
 // Helper: ensure values from DB are valid OutputType values
 function coerceSelectedOutputs(values: any): OutputType[] {
@@ -196,21 +193,6 @@ export default function ReleaseCommunications() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [activeProject?.id]);
 
-
-      useEffect(() => {
-        if (!currentOutput) {
-          setOutputSections([]);
-          setActiveSectionId(null);
-          return;
-        }
-
-        const sections = splitAgentOutputIntoSections(currentOutput);
-        setOutputSections(sections);
-        setActiveSectionId((prev) => {
-          if (prev && sections.some((s) => s.id === prev)) return prev;
-          return sections[0]?.id ?? null;
-        });
-      }, [currentOutput]);
 
       useEffect(() => {
         if (!artifactIdFromUrl || sessions.length === 0) return;
@@ -422,6 +404,10 @@ export default function ReleaseCommunications() {
         has_known_risks: !!knownRisks,
       };
 
+      const artifactName =
+        (releaseName && releaseName.trim()) ||
+        (csvFile?.name ? `Release Notes • ${csvFile.name}` : 'Release Notes');
+
       const invokePayload = {
       csv_data: csvData,
       selected_outputs: selectedOutputs,
@@ -430,6 +416,7 @@ export default function ReleaseCommunications() {
       known_risks: knownRisks || undefined,
       project_id: activeProject.id,
       project_name: activeProject.name,
+      artifact_name: artifactName,
     };
 
 
@@ -440,46 +427,17 @@ export default function ReleaseCommunications() {
         () => generateReleaseDocumentation(invokePayload)
       );
 
-      // Persist to project_artifacts
-      const artifactName =
-        (releaseName && releaseName.trim()) ||
-        (csvFile?.name ? `Release Notes • ${csvFile.name}` : 'Release Notes');
-
-      const inputData = {
-        csv_filename: csvFile?.name ?? null,
-        csv_row_count: parsedCsv?.rowCount ?? null,
-        selected_outputs: selectedOutputs,
-        release_name: releaseName || null,
-        target_audience: targetAudience || null,
-        known_risks: knownRisks || null,
-      };
-
-      const created = await supabaseFetch<ProjectArtifact[]>('/project_artifacts', {
-      method: 'POST',
-      body: JSON.stringify({
-        project_id: activeProject.id,
-        project_name: activeProject.name,
-        artifact_type: ARTIFACT_TYPE,
-        artifact_name: artifactName,
-        input_data: inputData,
-        output_data: result.output,
-        metadata: {
-          version_number: 1,
-          last_modified_by: 'agent',
-        },
-        status: 'active',
-        advisor_feedback: null,
-        advisor_reviewed_at: null,
-      }),
-    });
-
-
-
       setCurrentOutput(result.output);
+      const sections = buildOutputSections(
+        result.output,
+        selectedOutputs
+      );
+
+      setOutputSections(sections);
+      setActiveSectionId(sections[0]?.id ?? null);
       setAdvisorOutput('');
 
-      if (created && created[0]?.id) setCurrentArtifactId(created[0].id);
-      else setCurrentArtifactId(null);
+      setCurrentArtifactId(result.artifact_id ?? null);
 
       await loadSessions();
 
@@ -648,22 +606,27 @@ await loadSessions();
     setAdvisorOutput(session.advisor_feedback ?? '');
 
     // --- Restore inputs
-    const input = session.input_data || {};
-    setReleaseName(input.release_name ?? '');
-    setTargetAudience(input.target_audience ?? '');
-    setKnownRisks(input.known_risks ?? '');
-    setSelectedOutputs(coerceSelectedOutputs(input.selected_outputs));
+    const inputData = session.input_data || {};
+    const input = inputData.input || {};
+    const selected = coerceSelectedOutputs(inputData.selected_outputs);
+    setReleaseName(input.release_name ?? inputData.release_name ?? '');
+    setTargetAudience(input.target_audience ?? inputData.target_audience ?? '');
+    setKnownRisks(input.known_risks ?? inputData.known_risks ?? '');
+    setSelectedOutputs(selected);
 
     // --- Versioning (source of truth = metadata)
     const metadata = session.metadata ?? {};
     setCurrentArtifactVersion(metadata.version_number ?? 1);
     setLastModifiedBy(metadata.last_modified_by ?? 'agent');
 
-    // --- 🔥 CRITICAL UX FIXES (mirror Doc Agent)
-    const sections = splitAgentOutputIntoSections(output);
-    setOutputSections(sections);
+    const sections = buildOutputSections(
+      output,
+      selected
+    );
 
-    setActiveSectionId(sections[0]?.id ?? null);
+setOutputSections(sections);
+setActiveSectionId(sections[0]?.id ?? null);
+
 
     setEditingSectionId(null);
     setEditableOutput('');
@@ -997,7 +960,7 @@ await loadSessions();
                 {isGenerating ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Generating release documentation...
+                    Generating release docs...
                   </>
                 ) : isParsingCsv ? (
                   <>
@@ -1233,33 +1196,20 @@ await loadSessions();
                     </div>
                   ) : (
                     <div className="max-h-[600px] space-y-3 overflow-y-auto">
-                      {sessions.map((s) => (
-                        <Card
-                          key={s.id}
-                          className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
+                      {sessions.map((session) => (
+                        <SessionHistoryCard
+                          key={session.id}
+                          title={session.artifact_name || 'Release Notes'}
+                          timestamp={formatDate(session.created_at)}
+                          badges={coerceSelectedOutputs(session.input_data?.selected_outputs)}
                           onClick={() => {
-                            loadSession(s);
-                            setSearchParams({ artifact: s.id });
+                            loadSession(session);
+                            setSearchParams({ artifact: session.id });
                             setEditingSectionId(null);
                             setEditableOutput('');
                             setEditViewMode('edit');
                           }}
-                        >
-                          <CardContent className="p-4">
-                            <div className="space-y-2">
-                              <p className="text-xs text-muted-foreground">{formatDate(s.created_at)}</p>
-                              <p className="font-medium">{s.artifact_name || 'Release Notes'}</p>
-
-                              <div className="flex flex-wrap gap-1">
-                                {coerceSelectedOutputs(s.input_data?.selected_outputs).slice(0, 3).map((o) => (
-                                  <Badge key={o} variant="secondary" className="text-xs">
-                                    {o}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
+                        />
                       ))}
                     </div>
                   )}

@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getFunctionErrorMessage } from './function-errors';
 
 export interface DocumentationInput {
   problem_statement: string;
@@ -20,11 +21,13 @@ export interface DocumentationInput {
 export interface DocumentationResult {
   output: string;
   session_id?: string;
+  artifact_id?: string;
 }
 
 type DocumentationEdgeResponse = {
   output: string;
   session_id?: string;
+  artifact_id?: string;
 };
 
 export async function generateDocumentation(
@@ -37,14 +40,11 @@ export async function generateDocumentation(
 
   if (error) {
     console.error('Error calling product-documentation edge function:', error);
-
-    const details =
-      (error as any)?.context?.statusText ||
-      (error as any)?.details ||
-      (error as any)?.message ||
-      JSON.stringify(error);
-
-    throw new Error(details || 'Failed to generate documentation');
+    const message = await getFunctionErrorMessage(
+      error,
+      'Failed to generate documentation'
+    );
+    throw new Error(message);
   }
 
   if (!data || typeof data.output !== 'string') {
@@ -55,5 +55,6 @@ export async function generateDocumentation(
   return {
     output: data.output,
     session_id: data.session_id,
+    artifact_id: data.artifact_id,
   };
 }

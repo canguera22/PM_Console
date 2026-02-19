@@ -117,9 +117,12 @@ export interface PrioritizationSession {
 
 export interface WSJFCalculationInput {
   csv_content: string;
+  project_id: string;
+  project_name?: string;
   initiative_name?: string;
   default_effort_scale?: string;
   notes_context?: string;
+  artifact_name?: string;
   effort_field_name: string;
   max_score_per_factor: number;
   normalize_scores: boolean;
@@ -130,4 +133,5 @@ export interface WSJFCalculationInput {
 export interface WSJFCalculationResult {
   output: string;
   session_id?: string;
+  artifact_id?: string;
 }
