@@ -23,6 +23,11 @@ export const OUTPUT_TYPES = [
 
 export type OutputType = typeof OUTPUT_TYPES[number];
 
+export interface ReleaseOutputSection {
+  name: OutputType;
+  markdown: string;
+}
+
 export interface ReleaseGenerationInput {
   csv_data: string;
   selected_outputs: OutputType[];
@@ -38,6 +43,7 @@ export interface ReleaseGenerationResult {
   output: string;
   session_id?: string;
   artifact_id?: string;
+  sections?: ReleaseOutputSection[];
 }
 
 export interface ParsedCSV {

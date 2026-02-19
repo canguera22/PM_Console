@@ -31,7 +31,7 @@ import ReactMarkdown from 'react-markdown';
 
 import { generateReleaseDocumentation } from '@/lib/release-agent';
 import { supabaseFetch } from '@/lib/supabase';
-import { OUTPUT_TYPES, OutputType, ParsedCSV } from '@/types/release';
+import { OUTPUT_TYPES, OutputType, ParsedCSV, ReleaseOutputSection } from '@/types/release';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
@@ -63,6 +63,84 @@ type OutputSection = {
   content: string;   // markdown for that section
 };
 
+const OUTPUT_TYPE_SET = new Set<string>(OUTPUT_TYPES as unknown as string[]);
+
+function normalizeOutputType(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function stripLeadingH1(markdown: string): string {
+  return markdown.replace(/^(\s*#\s+.+\n+)+/, '').trim();
+}
+
+function normalizeSectionsToSelectedOutputs(
+  sections: OutputSection[],
+  selectedOutputs: OutputType[]
+): OutputSection[] {
+  if (selectedOutputs.length === 0) {
+    return sections.map((section, index) => ({
+      id: String(index),
+      title: section.title,
+      content: stripLeadingH1(section.content || ''),
+    }));
+  }
+
+  const byExactName = new Map<string, OutputSection>();
+  const byNormalizedName = new Map<string, OutputSection>();
+
+  sections.forEach((section) => {
+    if (!byExactName.has(section.title)) {
+      byExactName.set(section.title, section);
+    }
+    const normalized = normalizeOutputType(section.title);
+    if (!byNormalizedName.has(normalized)) {
+      byNormalizedName.set(normalized, section);
+    }
+  });
+
+  return selectedOutputs.map((name, index) => {
+    const matched =
+      byExactName.get(name) ??
+      byNormalizedName.get(normalizeOutputType(name));
+
+    return {
+      id: String(index),
+      title: name,
+      content: stripLeadingH1(matched?.content || ''),
+    };
+  });
+}
+
+function buildOutputSectionsFromStructured(
+  sections: ReleaseOutputSection[],
+  selectedOutputs: OutputType[]
+): OutputSection[] {
+  const mapped = sections.map((section, index) => ({
+    id: String(index),
+    title: section.name,
+    content: stripLeadingH1(section.markdown || ''),
+  }));
+
+  return normalizeSectionsToSelectedOutputs(mapped, selectedOutputs);
+}
+
+function outputSectionsToStructured(
+  sections: OutputSection[]
+): ReleaseOutputSection[] {
+  return sections.map((section) => ({
+    name: section.title as OutputType,
+    markdown: stripLeadingH1(section.content || ''),
+  }));
+}
+
+function buildCombinedOutput(
+  sections: OutputSection[]
+): string {
+  return sections
+    .map((section) => `# ${section.title}\n\n${section.content.trim()}`)
+    .join('\n\n');
+}
+
 
 function buildOutputSections(
   output: string,
@@ -72,17 +150,35 @@ function buildOutputSections(
 
   // 🔒 SINGLE OUTPUT → NO TABS
   if (selectedOutputs.length <= 1) {
-    return [
+    return normalizeSectionsToSelectedOutputs([
       {
         id: '0',
         title: selectedOutputs[0] ?? 'Output',
-        content: output.trim(),
+        content: stripLeadingH1(output.trim()),
       },
-    ];
+    ], selectedOutputs);
   }
 
-  // MULTI OUTPUT → split by exact output headers
-  return selectedOutputs.map((title, index) => {
+  // MULTI OUTPUT → prefer generic H1 parsing first (more tolerant of model variance)
+  const headerMatches = [...output.matchAll(/^#\s+(.+)$/gm)];
+  if (headerMatches.length > 1) {
+    const parsedSections = headerMatches.map((match, index) => {
+      const start = match.index ?? 0;
+      const end = headerMatches[index + 1]?.index ?? output.length;
+      const title = match[1].trim();
+
+      return {
+        id: String(index),
+        title,
+        content: stripLeadingH1(output.slice(start, end).trim()),
+      };
+    });
+
+    return normalizeSectionsToSelectedOutputs(parsedSections, selectedOutputs);
+  }
+
+  // Fallback: split by exact expected headers
+  const parsedSections = selectedOutputs.map((title, index) => {
     const header = `# ${title}`;
     const start = output.indexOf(header);
 
@@ -98,16 +194,17 @@ function buildOutputSections(
     return {
       id: String(index),
       title,
-      content: output.slice(start, end).trim(),
+      content: stripLeadingH1(output.slice(start, end).trim()),
     };
   }).filter(Boolean) as OutputSection[];
+
+  return normalizeSectionsToSelectedOutputs(parsedSections, selectedOutputs);
 }
 
 // Helper: ensure values from DB are valid OutputType values
 function coerceSelectedOutputs(values: any): OutputType[] {
   if (!Array.isArray(values)) return [];
-  const allowed = new Set<string>(OUTPUT_TYPES as unknown as string[]);
-  return values.filter((v) => typeof v === 'string' && allowed.has(v)) as OutputType[];
+  return values.filter((v) => typeof v === 'string' && OUTPUT_TYPE_SET.has(v)) as OutputType[];
 }
 
 const ARTIFACT_TYPE = 'release_communications';
@@ -428,10 +525,10 @@ export default function ReleaseCommunications() {
       );
 
       setCurrentOutput(result.output);
-      const sections = buildOutputSections(
-        result.output,
-        selectedOutputs
-      );
+      const sections =
+        Array.isArray(result.sections) && result.sections.length > 0
+          ? buildOutputSectionsFromStructured(result.sections, selectedOutputs)
+          : buildOutputSections(result.output, selectedOutputs);
 
       setOutputSections(sections);
       setActiveSectionId(sections[0]?.id ?? null);
@@ -543,7 +640,8 @@ await loadSessions();
       s.id === editingSectionId ? { ...s, content: editableOutput } : s
     );
 
-    const rebuiltOutput = updatedSections.map((s) => s.content).join('\n\n');
+    const rebuiltOutput = buildCombinedOutput(updatedSections);
+    const structuredSections = outputSectionsToStructured(updatedSections);
 
     try {
       const nextVersion = currentArtifactVersion + 1;
@@ -556,6 +654,7 @@ await loadSessions();
             version_number: nextVersion,
             last_modified_by: 'user',
             last_modified_at: new Date().toISOString(),
+            output_sections: structuredSections,
           },
         }),
       });
@@ -608,21 +707,28 @@ await loadSessions();
     // --- Restore inputs
     const inputData = session.input_data || {};
     const input = inputData.input || {};
-    const selected = coerceSelectedOutputs(inputData.selected_outputs);
+    const metadata = session.metadata ?? {};
+    const metadataSections = Array.isArray(metadata.output_sections)
+      ? (metadata.output_sections as ReleaseOutputSection[])
+      : [];
+
+    const selectedFromInput = coerceSelectedOutputs(inputData.selected_outputs);
+    const selectedFromMetadata = coerceSelectedOutputs(metadataSections.map((section) => section?.name));
+    const selected = selectedFromInput.length > 0 ? selectedFromInput : selectedFromMetadata;
+
     setReleaseName(input.release_name ?? inputData.release_name ?? '');
     setTargetAudience(input.target_audience ?? inputData.target_audience ?? '');
     setKnownRisks(input.known_risks ?? inputData.known_risks ?? '');
     setSelectedOutputs(selected);
 
     // --- Versioning (source of truth = metadata)
-    const metadata = session.metadata ?? {};
     setCurrentArtifactVersion(metadata.version_number ?? 1);
     setLastModifiedBy(metadata.last_modified_by ?? 'agent');
 
-    const sections = buildOutputSections(
-      output,
-      selected
-    );
+    const sections =
+      metadataSections.length > 0
+        ? buildOutputSectionsFromStructured(metadataSections, selected)
+        : buildOutputSections(output, selected);
 
 setOutputSections(sections);
 setActiveSectionId(sections[0]?.id ?? null);
@@ -1157,8 +1263,67 @@ setActiveSectionId(sections[0]?.id ?? null);
                           </Tabs>
                         </div>
                       ) : (
-                        <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
-                          <ReactMarkdown>{currentOutput}</ReactMarkdown>
+                        <div className="space-y-3">
+                          <div className="flex justify-end gap-2">
+                            {editingSectionId !== '0' ? (
+                              <>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    const singleSectionContent = outputSections[0]?.content ?? currentOutput;
+                                    setEditableOutput(singleSectionContent);
+                                    setEditingSectionId('0');
+                                    setEditViewMode('edit');
+                                  }}
+                                >
+                                  Edit
+                                </Button>
+
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    const singleSectionContent = outputSections[0]?.content ?? currentOutput;
+                                    void navigator.clipboard.writeText(singleSectionContent);
+                                  }}
+                                >
+                                  <Copy className="mr-2 h-4 w-4" />
+                                  Copy to Clipboard
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button size="sm" onClick={handleSaveEdits}>
+                                  Save
+                                </Button>
+
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingSectionId(null);
+                                    setEditableOutput('');
+                                    setEditViewMode('edit');
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                              </>
+                            )}
+                          </div>
+
+                          <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
+                            {editingSectionId === '0' ? (
+                              <Textarea
+                                value={editableOutput}
+                                onChange={(e) => setEditableOutput(e.target.value)}
+                                className="min-h-[400px] w-full font-mono text-sm"
+                              />
+                            ) : (
+                              <ReactMarkdown>{outputSections[0]?.content ?? currentOutput}</ReactMarkdown>
+                            )}
+                          </div>
                         </div>
                       )}
                     </>

@@ -1,10 +1,11 @@
 import { supabase } from './supabase';
-import { ReleaseGenerationInput, ReleaseGenerationResult } from '@/types/release';
+import { ReleaseGenerationInput, ReleaseGenerationResult, ReleaseOutputSection } from '@/types/release';
 import { getFunctionErrorMessage } from './function-errors';
 
 type ReleaseEdgeResponse = {
   output: string;
   artifact_id?: string;
+  sections?: ReleaseOutputSection[];
   // optional future fields:
   // run_id?: string;
   // metadata?: Record<string, any>;
@@ -35,5 +36,6 @@ export async function generateReleaseDocumentation(
   return {
     output: data.output,
     artifact_id: data.artifact_id,
+    sections: data.sections,
   };
 }

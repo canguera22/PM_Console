@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const FUNCTION_VERSION = 'pm-advisor@2025-12-19.2';
+const FUNCTION_VERSION = 'pm-advisor@2026-02-19.1';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
@@ -28,6 +28,32 @@ function corsHeaders() {
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Content-Type': 'application/json',
   };
+}
+
+function normalizeAdvisorOutput(raw: string): string {
+  let output = String(raw || '').trim();
+  if (!output) return output;
+
+  // Remove accidental code fences around the whole response
+  output = output
+    .replace(/^```(?:markdown|md)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+
+  // Enforce clean section headers even if the model echoes prompt instructions
+  const headerRules: Array<[RegExp, string]> = [
+    [/^\s*(?:##\s*)?(?:\d+\)\s*)?Executive Verdict(?:\s*\([^)]*\))?\s*$/gim, '## Executive Verdict'],
+    [/^\s*(?:##\s*)?(?:\d+\)\s*)?What['’]s Working(?:\s*\([^)]*\))?\s*$/gim, "## What's Working"],
+    [/^\s*(?:##\s*)?(?:\d+\)\s*)?Top Issues to Fix(?:\s*\([^)]*\))?\s*$/gim, '## Top Issues to Fix'],
+    [/^\s*(?:##\s*)?(?:\d+\)\s*)?Recommended Edits(?:\s*\([^)]*\))?\s*$/gim, '## Recommended Edits'],
+    [/^\s*(?:##\s*)?(?:\d+\)\s*)?Final PM Takeaway(?:\s*\([^)]*\))?\s*$/gim, '## Final PM Takeaway'],
+  ];
+
+  for (const [pattern, replacement] of headerRules) {
+    output = output.replace(pattern, replacement);
+  }
+
+  return output.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /**
@@ -175,27 +201,30 @@ Respond using **only the sections below**. Be concise and direct.
 
 ---
 
-## 1) Executive Verdict (3–5 sentences)
+## Executive Verdict
 
 Answer, based on the artifacts provided:
 
 * Is this content clear and decision-ready?
 * Who is most likely to be confused (customers, support, engineering, leadership)?
 * Is it overly long, vague, inconsistent, or too technical for its audience?
+* Keep this section to 3-5 sentences.
 
 ---
 
-## 2) What’s Working (Bullet list, max 5)
+## What's Working
 
 Call out what is **effective and should not be changed**.
 
 Only include points that materially help clarity, alignment, or execution.
+Use bullets and keep to max 5.
 
 ---
 
-## 3) Top Issues to Fix (Bullet list, max 5)
+## Top Issues to Fix
 
 List only issues that **meaningfully improve understanding, reduce risk, or unblock execution**.
+Use bullets and keep to max 5.
 
 Avoid:
 
@@ -205,7 +234,7 @@ Avoid:
 
 ---
 
-## 4) Recommended Edits (Concrete)
+## Recommended Edits
 
 Provide **specific, actionable changes**, such as:
 
@@ -218,7 +247,7 @@ Do **not** propose new scope or speculative work.
 
 ---
 
-## 5) Final PM Takeaway (1–2 sentences)
+## Final PM Takeaway
 
 If the PM fixed the issues above and changed nothing else, would this artifact be acceptable to:
 
@@ -227,6 +256,7 @@ If the PM fixed the issues above and changed nothing else, would this artifact b
 * or commit the team against?
 
 Answer directly.
+Keep this section to 1-2 sentences.
 
 ---
 
@@ -488,6 +518,7 @@ that directly affects clarity, risk, or decision-making.
 
     const data = await response.json();
     let output: string = data.choices?.[0]?.message?.content || '';
+    output = normalizeAdvisorOutput(output);
     const durationFirst = Date.now() - startTime;
 
     console.log('✅ [Success] Generated PM Advisor feedback (pass 1)', {

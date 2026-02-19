@@ -26,6 +26,145 @@ function isValidUUID(uuid: string): boolean {
   return uuidRegex.test(uuid);
 }
 
+type StructuredOutputSection = {
+  name: string;
+  markdown: string;
+};
+
+function normalizeOutputName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function sanitizeMarkdown(output: string): string {
+  return output.replace(/<!--[\s\S]*?-->/g, '').trim();
+}
+
+function stripLeadingH1(markdown: string): string {
+  return markdown.replace(/^#\s+.+\n+/, '').trim();
+}
+
+function extractJsonObject(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    // fall through
+  }
+
+  const fenced = trimmed.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]) {
+    try {
+      return JSON.parse(fenced[1]) as Record<string, unknown>;
+    } catch {
+      // fall through
+    }
+  }
+
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const candidate = trimmed.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(candidate) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function parseSectionsFromJson(
+  payload: Record<string, unknown>,
+  selectedOutputs: string[]
+): StructuredOutputSection[] {
+  const rawOutputs = Array.isArray(payload.outputs) ? payload.outputs : [];
+  const normalizedRows: Array<{ name: string; markdown: string }> = [];
+
+  for (const row of rawOutputs) {
+    if (!row || typeof row !== 'object') continue;
+    const record = row as Record<string, unknown>;
+    if (typeof record.name !== 'string' || typeof record.markdown !== 'string') continue;
+
+    normalizedRows.push({
+      name: record.name,
+      markdown: stripLeadingH1(sanitizeMarkdown(record.markdown)),
+    });
+  }
+
+  const byExactName = new Map<string, string>();
+  const byNormalizedName = new Map<string, string>();
+  normalizedRows.forEach((row) => {
+    if (!byExactName.has(row.name)) {
+      byExactName.set(row.name, row.markdown);
+    }
+    const normalized = normalizeOutputName(row.name);
+    if (!byNormalizedName.has(normalized)) {
+      byNormalizedName.set(normalized, row.markdown);
+    }
+  });
+
+  const usedIndexes = new Set<number>();
+  return selectedOutputs.map((name, index) => {
+    const exact = byExactName.get(name);
+    if (typeof exact === 'string') {
+      return { name, markdown: exact };
+    }
+
+    const normalized = byNormalizedName.get(normalizeOutputName(name));
+    if (typeof normalized === 'string') {
+      return { name, markdown: normalized };
+    }
+
+    // Final fallback: align by order to avoid blank sections when names drift
+    const fallbackIndex = normalizedRows.findIndex((_, i) => i === index && !usedIndexes.has(i));
+    if (fallbackIndex !== -1) {
+      usedIndexes.add(fallbackIndex);
+      return { name, markdown: normalizedRows[fallbackIndex].markdown };
+    }
+
+    const nextAvailableIndex = normalizedRows.findIndex((_, i) => !usedIndexes.has(i));
+    if (nextAvailableIndex !== -1) {
+      usedIndexes.add(nextAvailableIndex);
+      return { name, markdown: normalizedRows[nextAvailableIndex].markdown };
+    }
+
+    return { name, markdown: '' };
+  });
+}
+
+function parseSectionsFromMarkdown(
+  markdown: string,
+  selectedOutputs: string[]
+): StructuredOutputSection[] {
+  if (selectedOutputs.length === 0) return [];
+  if (selectedOutputs.length === 1) {
+    return [{ name: selectedOutputs[0], markdown: stripLeadingH1(sanitizeMarkdown(markdown)) }];
+  }
+
+  const headers = [...markdown.matchAll(/^#\s+(.+)$/gm)];
+  if (headers.length > 1) {
+    return selectedOutputs.map((name, index) => {
+      const start = headers[index]?.index;
+      const end = headers[index + 1]?.index ?? markdown.length;
+      if (start === undefined) return { name, markdown: '' };
+      const block = markdown.slice(start, end).trim();
+      return { name, markdown: stripLeadingH1(sanitizeMarkdown(block)) };
+    });
+  }
+
+  return selectedOutputs.map((name, index) => ({
+    name,
+    markdown: index === 0 ? stripLeadingH1(sanitizeMarkdown(markdown)) : '',
+  }));
+}
+
+function buildCombinedOutput(sections: StructuredOutputSection[]): string {
+  return sections
+    .map((section) => `# ${section.name}\n\n${section.markdown.trim()}`)
+    .join('\n\n');
+}
+
 async function getProjectContextText(projectId: string): Promise<string> {
   const { data, error } = await supabase
     .from('project_documents')
@@ -515,6 +654,21 @@ serve(async (req) => {
     if (release_name) userMessage += `Release Name: ${release_name}\n`;
     if (target_audience) userMessage += `Target Audience: ${target_audience}\n`;
     if (known_risks) userMessage += `Known Risks: ${known_risks}\n`;
+    userMessage += `\nSelected outputs (exact):\n${selectedOutputs.map((o) => `- ${o}`).join('\n')}\n`;
+    userMessage += `
+Return JSON ONLY in this shape:
+{
+  "outputs": [
+    { "name": "<one selected output>", "markdown": "<markdown content, no outer H1 title>" }
+  ]
+}
+
+Rules:
+- Include ALL selected outputs exactly once.
+- "name" must exactly match selected output labels.
+- Keep outputs in the same order as selected outputs.
+- Do not include any extra top-level keys.
+`;
 
     // ---------------------------
     // OpenAI call
@@ -531,6 +685,35 @@ serve(async (req) => {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage },
         ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'release_outputs',
+            strict: true,
+            schema: {
+              type: 'object',
+              properties: {
+                outputs: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      name: {
+                        type: 'string',
+                        enum: selectedOutputs,
+                      },
+                      markdown: { type: 'string' },
+                    },
+                    required: ['name', 'markdown'],
+                    additionalProperties: false,
+                  },
+                },
+              },
+              required: ['outputs'],
+              additionalProperties: false,
+            },
+          },
+        },
         temperature: 0.4, 
         max_tokens: 4000,
       }),
@@ -541,14 +724,15 @@ serve(async (req) => {
       throw new Error(err.error?.message || 'OpenAI request failed');
     }
 
-    function sanitizeAgentOutput(output: string): string {
-      return output.replace(/<!--[\s\S]*?-->/g, '').trim();
-    }
-
-
     const data = await response.json();
     const rawOutput = data.choices?.[0]?.message?.content ?? '';
-    const output = sanitizeAgentOutput(rawOutput);
+    const parsed = extractJsonObject(rawOutput);
+
+    const sections = parsed
+      ? parseSectionsFromJson(parsed, selectedOutputs)
+      : parseSectionsFromMarkdown(rawOutput, selectedOutputs);
+
+    const output = buildCombinedOutput(sections);
 
     console.log('================ RAW LLM OUTPUT ================');
     console.log(output);
@@ -587,6 +771,7 @@ serve(async (req) => {
             input_schema_version: 1,
             tokens_used: data.usage?.total_tokens,
             duration_ms: duration,
+            output_sections: sections,
           },
           status: 'active',
         })
@@ -600,7 +785,7 @@ serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ output, artifact_id: artifactId }), {
+    return new Response(JSON.stringify({ output, artifact_id: artifactId, sections }), {
       status: 200,
       headers: {
         'Content-Type': 'application/json',
