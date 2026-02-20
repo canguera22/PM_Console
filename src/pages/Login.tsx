@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { parseErrorMessage } from '@/lib/agent-logger';
+import productWorkbenchLogo from '@/assets/branding/product_workbench_logo.png';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -36,7 +37,16 @@ export default function Login() {
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-4">
-      <Card className="w-full max-w-md">
+      <div className="w-full max-w-md space-y-4">
+        <div className="flex justify-center">
+          <img
+            src={productWorkbenchLogo}
+            alt="Product Workbench"
+            className="h-16 w-auto"
+          />
+        </div>
+
+        <Card className="w-full">
         <CardHeader>
           <CardTitle>Log In</CardTitle>
           <CardDescription>Sign in to access Product Console</CardDescription>
@@ -82,7 +92,7 @@ export default function Login() {
           </p>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
-

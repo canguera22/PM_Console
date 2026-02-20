@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
 import { createProject } from '@/lib/projects';
+import { uploadProjectDocument } from '@/lib/projectDocuments';
 import { useToast } from '@/hooks/use-toast';
 import { ActiveProject } from '@/types/project';
 
@@ -80,8 +81,6 @@ const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       // Upload project context documents (non-blocking)
       if (contextFiles.length > 0) {
         try {
-          const { uploadProjectDocument } = await import('@/lib/projectDocuments');
-
           for (const file of contextFiles) {
             await uploadProjectDocument(project.id, file);
           }
@@ -197,7 +196,7 @@ const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
               <Input
                 type="file"
                 multiple
-                accept=".pdf,.txt,.doc,.docx"
+                accept=".pdf,.txt,.md,.csv,.doc,.docx,.xlsx,.xls,.pptx"
                 onChange={handleFileChange}
               />
 

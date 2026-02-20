@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { useSearchParams } from 'react-router-dom';
-import { extractTextFromFile } from '@/lib/documentExtraction';
+import { uploadProjectDocument } from '@/lib/projectDocuments';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 
@@ -238,42 +238,7 @@ const handleDocumentUpload = async (file: File) => {
   setUploadingDoc(true);
 
   try {
-    // 1️⃣ Create DB row first
-    const { data: doc, error: insertError } = await supabase
-      .from('project_documents')
-      .insert({
-        project_id: activeProject.id,
-        name: file.name,
-        document_type: file.type || null,
-        status: 'active',
-      })
-      .select()
-      .single();
-
-    if (insertError || !doc) throw insertError;
-
-    // 2️⃣ Upload to storage using canonical path
-    const storagePath = `projects/${activeProject.id}/${doc.id}/${file.name}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from('project-documents')
-      .upload(storagePath, file);
-
-    if (uploadError) throw uploadError;
-
-    // 3️⃣ Extract text
-    const { text, metadata } = await extractTextFromFile(file);
-
-    // 4️⃣ Update DB with storage + extracted text
-    await supabase
-      .from('project_documents')
-      .update({
-        storage_path: storagePath,
-        extracted_text: text,
-        metadata,
-      })
-      .eq('id', doc.id);
-
+    await uploadProjectDocument(activeProject.id, file);
 
     //  Update UI
     await fetchProjectDocuments();
@@ -408,7 +373,7 @@ const toggleSection = (type: string) => {
                 Project Context Documents
               </h2>
               <p className="text-xs text-[#6B7280] mt-1 max-w-xl">
-                Upload PRDs, specs, decks, or notes to give AI agents richer project context.
+                Upload PRDs, specs, decks, or notes to give AI agents richer project context. Supported document types include: .txt, .md, .csv, .pdf, .docx, .xlsx, .xls, .pptx.
               </p>
             </div>
 
@@ -418,6 +383,7 @@ const toggleSection = (type: string) => {
               <input
                 type="file"
                 className="hidden"
+                accept=".pdf,.txt,.md,.csv,.doc,.docx,.xlsx,.xls,.pptx"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) handleDocumentUpload(file);
@@ -673,5 +639,3 @@ function ArtifactCard({ artifact, config, onClick }: {
     </button>
   );
 }
-
-

@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { extractTextFromFile } from '@/lib/documentExtraction';
 
 export async function uploadProjectDocument(
   projectId: string,
@@ -39,9 +40,40 @@ export async function uploadProjectDocument(
   }
 
   // 3. Update DB row with storage path
+  let extractedText: string | null = null;
+  let extractionMetadata: Record<string, unknown> = {};
+
+  try {
+    const extraction = await extractTextFromFile(file);
+    extractedText = extraction.text ?? null;
+    extractionMetadata = extraction.metadata ?? {};
+  } catch (extractionError: any) {
+    console.warn('⚠️ Document text extraction skipped/failed', {
+      name: file.name,
+      reason: extractionError?.message ?? 'Unknown extraction error',
+    });
+    extractionMetadata = {
+      extraction_error: extractionError?.message ?? 'Failed to extract text',
+    };
+  }
+
+  const baseMetadata = {
+    file_name: file.name,
+    file_size_bytes: file.size,
+    mime_type: file.type || null,
+    extension: file.name.split('.').pop()?.toLowerCase() ?? null,
+  };
+
   await supabase
     .from('project_documents')
-    .update({ storage_path: storagePath })
+    .update({
+      storage_path: storagePath,
+      extracted_text: extractedText,
+      metadata: {
+        ...baseMetadata,
+        ...extractionMetadata,
+      },
+    })
     .eq('id', docRow.id);
 
   return docRow;

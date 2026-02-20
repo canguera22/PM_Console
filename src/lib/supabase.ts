@@ -25,11 +25,14 @@ export async function supabaseFetch<T>(
   path: string,
   options?: RequestInit
 ): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const accessToken = data.session?.access_token;
+
   const response = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...options,
     headers: {
       'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Authorization': `Bearer ${accessToken ?? SUPABASE_ANON_KEY}`,
       'Content-Type': 'application/json',
       'Prefer': 'return=representation',
       ...options?.headers,

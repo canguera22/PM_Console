@@ -21,13 +21,19 @@ import {
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { supabaseFetch } from '@/lib/supabase';
 import { ProjectArtifact } from '@/types/project-artifacts';
+import { fetchProjects } from '@/lib/projects';
+import { CreateProjectModal } from '@/components/CreateProjectModal';
+import { Project } from '@/types/project';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { activeProject } = useActiveProject();
+  const { activeProject, setActiveProject } = useActiveProject();
 
   const [recentArtifacts, setRecentArtifacts] = useState<ProjectArtifact[]>([]);
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
+  const [hasAutoOpenedCreateModal, setHasAutoOpenedCreateModal] = useState(false);
 
   const modules = [
     {
@@ -122,6 +128,27 @@ export default function Dashboard() {
     loadRecentActivity();
   }, [activeProject]);
 
+  useEffect(() => {
+    const loadProjectsForOnboarding = async () => {
+      try {
+        const projects = await fetchProjects();
+        const hasNonAdHocProject = projects.some((project: Project) => project.name !== 'Ad-hoc');
+        setShowOnboarding(!hasNonAdHocProject);
+      } catch (error) {
+        console.error('Error loading projects for onboarding:', error);
+      }
+    };
+
+    void loadProjectsForOnboarding();
+  }, []);
+
+  useEffect(() => {
+    if (showOnboarding && !hasAutoOpenedCreateModal) {
+      setIsCreateProjectModalOpen(true);
+      setHasAutoOpenedCreateModal(true);
+    }
+  }, [showOnboarding, hasAutoOpenedCreateModal]);
+
   const formatRelativeTime = (dateString: string) => {
     const date = new Date(dateString);
     const diff = Date.now() - date.getTime();
@@ -152,6 +179,26 @@ export default function Dashboard() {
       </div>
 
       <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8 space-y-10">
+        {showOnboarding && (
+          <Card className="border-[#BFDBFE] bg-[#EFF6FF]">
+            <CardHeader>
+              <CardTitle className="text-xl text-[#1E3A8A]">
+                Welcome to Product Workbench
+              </CardTitle>
+              <CardDescription className="text-[#1E40AF]">
+                To get started, create a project. All generated artifacts are project-based, and context builds over
+                time. You can also add project context documents, and those documents plus generated artifacts are used
+                to improve future outputs.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={() => setIsCreateProjectModalOpen(true)}>
+                Create New Project
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {/* ================= RECENT ACTIVITY ================= */}
         <Card>
           <CardHeader>
@@ -285,6 +332,16 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      <CreateProjectModal
+        open={isCreateProjectModalOpen}
+        onOpenChange={setIsCreateProjectModalOpen}
+        onProjectCreated={(project) => {
+          setActiveProject(project);
+          setShowOnboarding(false);
+          setIsCreateProjectModalOpen(false);
+        }}
+      />
     </div>
   );
 }
