@@ -245,7 +245,7 @@ const handleDocumentUpload = async (file: File) => {
     toast.success('Document uploaded');
   } catch (err: any) {
     console.error('❌ Upload failed', err);
-    toast.error('Failed to upload document');
+    toast.error(err?.message || 'Failed to upload document');
   } finally {
     setUploadingDoc(false);
   }

@@ -64,7 +64,7 @@ export async function uploadProjectDocument(
     extension: file.name.split('.').pop()?.toLowerCase() ?? null,
   };
 
-  await supabase
+  const { error: updateError } = await supabase
     .from('project_documents')
     .update({
       storage_path: storagePath,
@@ -75,6 +75,11 @@ export async function uploadProjectDocument(
       },
     })
     .eq('id', docRow.id);
+
+  if (updateError) {
+    console.error('❌ Failed to persist extracted document data:', updateError);
+    throw updateError;
+  }
 
   return docRow;
 }

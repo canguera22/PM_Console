@@ -2,6 +2,9 @@ import * as pdfjs from 'pdfjs-dist';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
+import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 function decodeXmlEntities(value: string): string {
   return value
