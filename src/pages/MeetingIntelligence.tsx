@@ -109,6 +109,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       id: a.id,
       created_at: a.created_at,
       artifact_name: a.artifact_name,
+      created_by_email: a.created_by_email ?? null,
       meeting_type: (input.meeting_type as string) ?? (nestedInput.meeting_type as string) ?? null,
       project_name: a.project_name ?? null,
       participants: (input.participants as string) ?? (nestedInput.participants as string) ?? null,
@@ -655,6 +656,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                             title={session.artifact_name || session.project_name || 'Meeting Analysis'}
                             timestamp={formatDate(session.created_at)}
                             description={session.transcript ? `${session.transcript.substring(0, 100)}...` : undefined}
+                            metaLine={`Created by: ${session.created_by_email ?? 'Unknown'}`}
                             badges={session.meeting_type ? [session.meeting_type] : []}
                             rightBadge={session.version > 1 ? `v${session.version} · Edited` : undefined}
                             onClick={() => {

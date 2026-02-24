@@ -1,5 +1,5 @@
 // Project API functions
-import { supabaseFetch } from './supabase';
+import { supabase, supabaseFetch } from './supabase';
 import { Project } from '@/types/project';
 
 /**
@@ -35,20 +35,37 @@ export async function createProject(
   description?: string,
   status: 'active' | 'archived' | 'deleted' = 'active'
 ): Promise<Project> {
-  const data = await supabaseFetch<Project[]>('/projects', {
-    method: 'POST',
-    body: JSON.stringify({
+  const { data, error } = await supabase.auth.getSession();
+  if (error) {
+    throw error;
+  }
+
+  const session = data.session;
+  const userId = session?.user?.id;
+  if (!userId || !session?.access_token) {
+    throw new Error('No authenticated user found');
+  }
+
+  const { data: project, error: insertError } = await supabase
+    .from('projects')
+    .insert({
       name,
       description: description || null,
       status,
-    }),
-  });
+      owner_user_id: userId,
+    })
+    .select()
+    .single();
 
-  if (!data || data.length === 0) {
+  if (insertError) {
+    throw insertError;
+  }
+
+  if (!project) {
     throw new Error('Failed to create project');
   }
 
-  return data[0];
+  return project as Project;
 }
 
 /**

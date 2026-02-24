@@ -6,6 +6,8 @@ export interface ProjectArtifact {
   project_name: string;
   artifact_type: string;
   artifact_name: string | null;
+  created_by_user_id?: string | null;
+  created_by_email?: string | null;
   input_data: Record<string, unknown> | null;
   output_data: string | null;
   metadata: Record<string, unknown> | null;
@@ -13,4 +15,3 @@ export interface ProjectArtifact {
   advisor_reviewed_at: string | null;
   status: 'active' | 'archived' | 'deleted';
 }
-

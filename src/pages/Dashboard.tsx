@@ -261,6 +261,8 @@ export default function Dashboard() {
                       </span>
                       <span>•</span>
                       <span>{formatRelativeTime(artifact.created_at)}</span>
+                      <span>•</span>
+                      <span>Created by: {artifact.created_by_email ?? 'Unknown'}</span>
                     </div>
                   </div>
 

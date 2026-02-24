@@ -49,6 +49,7 @@ type ProjectArtifact = {
   project_name: string;
   artifact_type: string;
   artifact_name: string | null;
+  created_by_email?: string | null;
   input_data: any; // jsonb
   output_data: string | null;
   metadata: Record<string, any> | null;
@@ -1366,6 +1367,7 @@ setActiveSectionId(sections[0]?.id ?? null);
                           key={session.id}
                           title={session.artifact_name || 'Release Notes'}
                           timestamp={formatDate(session.created_at)}
+                          metaLine={`Created by: ${session.created_by_email ?? 'Unknown'}`}
                           badges={coerceSelectedOutputs(session.input_data?.selected_outputs)}
                           onClick={() => {
                             loadSession(session);

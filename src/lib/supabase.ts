@@ -23,10 +23,14 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // Helper function to fetch from PostgREST API
 export async function supabaseFetch<T>(
   path: string,
-  options?: RequestInit
+  options?: RequestInit,
+  accessTokenOverride?: string
 ): Promise<T> {
-  const { data } = await supabase.auth.getSession();
-  const accessToken = data.session?.access_token;
+  let accessToken = accessTokenOverride;
+  if (!accessToken) {
+    const { data } = await supabase.auth.getSession();
+    accessToken = data.session?.access_token;
+  }
   if (!accessToken) {
     throw new Error('No active auth session');
   }
@@ -43,7 +47,14 @@ export async function supabaseFetch<T>(
   });
 
   if (!response.ok) {
-    throw new Error(`API error: ${response.statusText}`);
+    let details = response.statusText;
+    try {
+      const errorBody = await response.json();
+      details = errorBody.message || errorBody.error || JSON.stringify(errorBody);
+    } catch {
+      // Fall back to status text when no JSON payload is available.
+    }
+    throw new Error(`API error (${response.status}): ${details}`);
   }
 
   return response.json();

@@ -28,6 +28,7 @@ interface ProjectArtifact {
   project_name: string;
   artifact_type: string;
   artifact_name: string;
+  created_by_email?: string | null;
   output_data: string;
   input_data?: {
     initiative_name?: string;
@@ -632,6 +633,9 @@ function ArtifactCard({ artifact, config, onClick }: {
       </h3>
       <p className="text-xs text-[#6B7280] mb-2">
         {new Date(artifact.created_at).toLocaleDateString()} at {new Date(artifact.created_at).toLocaleTimeString()}
+      </p>
+      <p className="text-xs text-[#6B7280] mb-2">
+        Created by: {artifact.created_by_email ?? 'Unknown'}
       </p>
       <div className="flex items-center justify-between">
         <ChevronRight className="w-4 h-4 text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors" />

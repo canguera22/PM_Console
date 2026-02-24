@@ -6,6 +6,7 @@ interface SessionHistoryCardProps {
   timestamp: string;
   onClick: () => void;
   description?: string;
+  metaLine?: string;
   badges?: string[];
   maxBadges?: number;
   rightBadge?: string;
@@ -16,6 +17,7 @@ export function SessionHistoryCard({
   timestamp,
   onClick,
   description,
+  metaLine,
   badges = [],
   maxBadges = 3,
   rightBadge,
@@ -45,6 +47,10 @@ export function SessionHistoryCard({
             <p className="line-clamp-2 text-xs text-muted-foreground">{description}</p>
           ) : null}
 
+          {metaLine ? (
+            <p className="text-xs text-muted-foreground">{metaLine}</p>
+          ) : null}
+
           {visibleBadges.length > 0 ? (
             <div className="flex flex-wrap gap-1">
               {visibleBadges.map((badge) => (
@@ -64,4 +70,3 @@ export function SessionHistoryCard({
     </Card>
   );
 }
-

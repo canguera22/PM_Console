@@ -2,6 +2,7 @@ export interface MeetingSession {
   id: string;
   created_at: string;
   artifact_name?: string | null;
+  created_by_email?: string | null;
   meeting_type: string | null;
   project_name: string | null;
   participants: string | null;
@@ -18,6 +19,8 @@ export interface ProjectArtifactRow {
   project_name: string;
   artifact_type: string;
   artifact_name: string | null;
+  created_by_user_id?: string | null;
+  created_by_email?: string | null;
   input_data: Record<string, any> | null;
   output_data: string | null;
   metadata: Record<string, any> | null;

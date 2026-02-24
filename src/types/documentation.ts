@@ -1,6 +1,7 @@
 export interface DocumentationSession {
   id: string;
   created_at: string;
+  created_by_email?: string | null;
   input_name: string;
   problem_statement: string;
   updated_at?: string;

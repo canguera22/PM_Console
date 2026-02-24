@@ -1630,6 +1630,7 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                           key={session.id}
                           title={getSessionTitle(session)}
                           timestamp={formatDate(session.created_at)}
+                          metaLine={`Created by: ${session.created_by_email ?? 'Unknown'}`}
                           badges={getSessionSelectedOutputs(session)}
                           onClick={() => {
                             loadSession(session);

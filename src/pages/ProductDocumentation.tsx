@@ -123,6 +123,7 @@ type ProjectArtifactRow = {
   project_name: string;
   artifact_type: string;
   artifact_name: string | null;
+  created_by_email?: string | null;
   input_data: Record<string, any> | null;
   output_data: string | null;
   metadata: Record<string, any> | null;
@@ -514,6 +515,7 @@ const handleDrop = useCallback((e: React.DragEvent) => {
     return {
       id: a.id as any, // in case your DocumentationSession.id is typed as number; better to update it to string later
       created_at: a.created_at,
+      created_by_email: a.created_by_email ?? null,
 
       input_name: input.input_name ?? a.artifact_name ?? '',
       problem_statement: input.problem_statement ?? nestedInput.problem_statement ?? '',
@@ -1802,6 +1804,7 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                               title={session.input_name || 'Untitled Document'}
                               timestamp={`${new Date(session.created_at).toLocaleDateString()} at ${new Date(session.created_at).toLocaleTimeString()}`}
                               description={session.problem_statement ? `${session.problem_statement.slice(0, 80)}...` : undefined}
+                              metaLine={`Created by: ${session.created_by_email ?? 'Unknown'}`}
                               badges={(session.selected_outputs ?? []).map((outputKey) => getOutputLabel(outputKey))}
                               rightBadge={
                                 session.version_number > 1 || session.last_modified_by === 'user'

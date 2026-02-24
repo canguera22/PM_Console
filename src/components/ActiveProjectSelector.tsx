@@ -9,12 +9,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Check, ChevronDown, FolderOpen, Plus } from 'lucide-react';
+import { Check, ChevronDown, FolderOpen, Plus, UserPlus } from 'lucide-react';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { fetchProjects } from '@/lib/projects';
 import { Project } from '@/types/project';
 import { CreateProjectModal } from './CreateProjectModal';
 import { useToast } from '@/hooks/use-toast';
+import { ManageProjectAccessDialog } from './ManageProjectAccessDialog';
 
 export function ActiveProjectSelector() {
   const { activeProject, setActiveProject, isLoading: contextLoading } = useActiveProject();
@@ -22,6 +23,7 @@ export function ActiveProjectSelector() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isAccessModalOpen, setIsAccessModalOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   // Load projects when dropdown opens
@@ -66,7 +68,7 @@ export function ActiveProjectSelector() {
     loadProjects(); // Refresh the list
   };
 
-  if (contextLoading || !activeProject) {
+  if (contextLoading) {
     return (
       <div className="flex items-center gap-2 rounded-md border border-[#E5E7EB] bg-white px-3 py-2">
         <FolderOpen className="h-4 w-4 text-[#9CA3AF]" />
@@ -85,7 +87,7 @@ export function ActiveProjectSelector() {
           >
             <FolderOpen className="h-4 w-4 text-[#6B7280]" />
             <span className="max-w-[200px] truncate text-sm font-medium text-[#111827]">
-              {activeProject.name}
+              {activeProject?.name ?? 'Select Project'}
             </span>
             <ChevronDown className="h-4 w-4 text-[#9CA3AF]" />
           </Button>
@@ -122,7 +124,7 @@ export function ActiveProjectSelector() {
                       </div>
                     )}
                   </div>
-                  {activeProject.id === project.id && (
+                  {activeProject?.id === project.id && (
                     <Check className="h-4 w-4 text-[#3B82F6] ml-2 flex-shrink-0" />
                   )}
                 </DropdownMenuItem>
@@ -131,6 +133,17 @@ export function ActiveProjectSelector() {
           )}
           
           <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={!activeProject}
+            onClick={() => {
+              setDropdownOpen(false);
+              setIsAccessModalOpen(true);
+            }}
+            className="gap-2 cursor-pointer"
+          >
+            <UserPlus className="h-4 w-4" />
+            <span className="font-medium">Manage Access...</span>
+          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => {
               setDropdownOpen(false);
@@ -148,6 +161,11 @@ export function ActiveProjectSelector() {
         open={isCreateModalOpen}
         onOpenChange={setIsCreateModalOpen}
         onProjectCreated={handleProjectCreated}
+      />
+      <ManageProjectAccessDialog
+        open={isAccessModalOpen}
+        onOpenChange={setIsAccessModalOpen}
+        activeProject={activeProject}
       />
     </>
   );

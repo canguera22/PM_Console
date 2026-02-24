@@ -1,7 +1,7 @@
 // Active Project Context - Global state management for active project
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { ActiveProject } from '@/types/project';
-import { createProject, fetchAdHocProject, fetchProjectById } from '@/lib/projects';
+import { fetchProjectById, fetchProjects } from '@/lib/projects';
 import { useAuth } from '@/contexts/AuthContext';
 
 interface ActiveProjectContextType {
@@ -64,21 +64,25 @@ export function ActiveProjectProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Fallback to Ad-hoc project
-      let adHocProject;
-      try {
-        adHocProject = await fetchAdHocProject();
-      } catch {
-        adHocProject = await createProject('Ad-hoc', 'Default project');
-      }
-      const adHoc: ActiveProject = {
-        id: adHocProject.id,
-        name: adHocProject.name,
-        description: adHocProject.description,
-      };
+      // Fallback to any accessible project
+      const accessibleProjects = await fetchProjects();
+      if (accessibleProjects.length > 0) {
+        const preferredProject =
+          accessibleProjects.find((project) => project.name === 'Ad-hoc') ??
+          accessibleProjects[0];
 
-      setActiveProjectState(adHoc);
-      localStorage.setItem(storageKey, adHocProject.id);
+        setActiveProjectState({
+          id: preferredProject.id,
+          name: preferredProject.name,
+          description: preferredProject.description,
+        });
+        localStorage.setItem(storageKey, preferredProject.id);
+        return;
+      }
+
+      // No accessible projects yet. Leave selection empty and let onboarding/create flow handle it.
+      setActiveProjectState(null);
+      localStorage.removeItem(storageKey);
     } catch (error) {
       console.error('Error initializing active project:', error);
     } finally {
