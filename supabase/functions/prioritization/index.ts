@@ -58,6 +58,12 @@ REQUIRED STRUCTURE:
 3. Key Tradeoffs & Insights
 4. Risks & Dependencies
 5. Recommended Next Actions
+6. Conflicts with Context Documents
+
+FINAL SECTION REQUIREMENT:
+- The last section header must be exactly: "## Conflicts with Context Documents"
+- Cross-check your recommendations and claims against uploaded project context documents and previously generated project artifacts (if provided).
+- If no conflicts are found, explicitly write: "No conflicts identified"
 
 You may reference WSJF scores selectively if they add decision value.
 Never mirror the full dataset.
@@ -150,6 +156,34 @@ const projectDocsContext =
         .join('\n\n')
     : '';
 
+const { data: projectArtifacts, error: artifactsError } = await supabase
+  .from('project_artifacts')
+  .select('artifact_type, artifact_name, output_data, created_at')
+  .eq('project_id', project_id)
+  .eq('status', 'active')
+  .not('output_data', 'is', null)
+  .neq('artifact_type', 'pm_advisor_feedback')
+  .order('created_at', { ascending: false })
+  .limit(5);
+
+if (artifactsError) {
+  console.warn('[ARTIFACTS WARNING] Failed to load project artifacts', artifactsError);
+}
+
+const projectArtifactsContext =
+  Array.isArray(projectArtifacts) && projectArtifacts.length > 0
+    ? projectArtifacts
+        .map(a => {
+          const body = typeof a.output_data === 'string' ? a.output_data : '';
+          const snippet =
+            body.length > 1800
+              ? `${body.slice(0, 1200)}\n\n[... truncated ...]\n\n${body.slice(-400)}`
+              : body;
+          return `### ${a.artifact_name || a.artifact_type} (${a.artifact_type})\n${snippet}`;
+        })
+        .join('\n\n')
+    : '';
+
 
     /* ---------------- Prompt Assembly ---------------- */
 
@@ -207,6 +241,24 @@ Do NOT quote verbatim unless necessary.
 ${projectDocsContext}
 `;
 }
+
+if (projectArtifactsContext) {
+  userPrompt += `
+
+PRIOR PROJECT ARTIFACTS (cross-check for consistency and contradictions):
+Use these as supporting project history/context. They may contain prior assumptions that should be validated against current data and uploaded docs.
+
+${projectArtifactsContext}
+`;
+}
+
+    userPrompt += `
+
+REQUIRED FINAL SECTION:
+- End the response with the exact heading: ## Conflicts with Context Documents
+- Compare your recommendations/output against uploaded project context documents and prior project artifacts included above.
+- If there are no conflicts, explicitly write: No conflicts identified
+`;
 
 
     /* ---------------- OpenAI Call ---------------- */

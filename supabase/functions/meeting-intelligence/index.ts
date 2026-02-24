@@ -48,8 +48,12 @@ SOURCE AUTHORITY RULES
 
 REQUIRED OUTPUT SECTION
 
-## Conflicts With Authoritative Context
-- If conflicts exist, list and explain them
+## Conflicts with Context Documents
+- This section must appear at the very end of the output.
+- Verify the meeting transcript-derived conclusions against:
+  - uploaded project context documents
+  - other previously generated project artifacts (if provided)
+- If conflicts exist, list each conflict and explain the impact.
 - If NO conflicts exist, explicitly state: "No conflicts identified"
 - This section must always be present
 
@@ -109,6 +113,7 @@ serve(async (req) => {
     }
 
     let projectContextText = '';
+    let projectArtifactContextText = '';
 
       const { data: docs, error: docsError } = await supabase
         .from('project_documents')
@@ -125,6 +130,27 @@ serve(async (req) => {
               (d) =>
                 `\n---\nDocument: ${d.name}\n${d.extracted_text}`
             )
+            .join('\n');
+      }
+
+      const { data: artifacts, error: artifactsError } = await supabase
+        .from('project_artifacts')
+        .select('artifact_type, artifact_name, output_data, created_at')
+        .eq('project_id', project_id)
+        .eq('status', 'active')
+        .not('output_data', 'is', null)
+        .neq('artifact_type', 'pm_advisor_feedback')
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (!artifactsError && artifacts && artifacts.length > 0) {
+        projectArtifactContextText =
+          `\n\nPREVIOUS PROJECT ARTIFACTS (REFERENCE FOR CONSISTENCY/CROSS-CHECKS):\n` +
+          artifacts
+            .map((a) => {
+              const excerpt = (a.output_data || '').slice(0, 1200);
+              return `\n---\nArtifact: ${a.artifact_name || a.artifact_type} (${a.artifact_type})\n${excerpt}`;
+            })
             .join('\n');
       }
 
@@ -167,7 +193,7 @@ serve(async (req) => {
     }
 
     // Build user message
-    let userMessage = `Please analyze this meeting transcript:\n\n${meeting_transcript}${projectContextText}`;
+    let userMessage = `Please analyze this meeting transcript:\n\n${meeting_transcript}${projectContextText}${projectArtifactContextText}`;
 
     if (meeting_type) {
       userMessage += `\n\nMeeting Type: ${meeting_type}`;
@@ -178,6 +204,7 @@ serve(async (req) => {
     if (participants) {
       userMessage += `\nParticipants: ${participants}`;
     }
+    userMessage += `\n\nREQUIRED FINAL SECTION:\n- End the output with exactly this heading: "## Conflicts with Context Documents"\n- In that section, compare your output against uploaded project documents and prior project artifacts provided above.\n- If none conflict, write: "No conflicts identified".`;
 
     console.log('🤖 [OpenAI] Calling GPT-4o...');
     console.log('📊 [OpenAI] Message length:', userMessage.length);

@@ -188,6 +188,32 @@ async function getProjectContextText(projectId: string): Promise<string> {
     .join('\n\n');
 }
 
+async function getProjectArtifactContextText(projectId: string): Promise<string> {
+  const { data, error } = await supabase
+    .from('project_artifacts')
+    .select('artifact_type, artifact_name, output_data, created_at')
+    .eq('project_id', projectId)
+    .eq('status', 'active')
+    .not('output_data', 'is', null)
+    .neq('artifact_type', 'pm_advisor_feedback')
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (error) {
+    console.warn('⚠️ Failed to fetch project artifacts', error);
+    return '';
+  }
+
+  if (!data || data.length === 0) return '';
+
+  return data
+    .map((artifact) => {
+      const excerpt = (artifact.output_data ?? '').slice(0, 1400);
+      return `### Project Artifact: ${artifact.artifact_name || artifact.artifact_type} (${artifact.artifact_type})\n${excerpt}`;
+    })
+    .join('\n\n');
+}
+
 
 // =====================================================
 // PROMPTS
@@ -204,6 +230,9 @@ You:
 - Avoid referencing internal systems unless explicitly instructed
 - Do not invent features or capabilities not supported by the input
 - Output sections MUST appear in the same order as selected_outputs.
+- Every output markdown body MUST end with a section headed exactly: "## Conflicts with Context Documents".
+- In that final section, cross-check the output against uploaded project context documents and previously generated project artifacts (if provided).
+- If no conflicts are found, explicitly state: "No conflicts identified".
 `.trim();
 
 // ---------- Customer-Facing ----------
@@ -620,6 +649,7 @@ serve(async (req) => {
     // Fetch project context documents
     // ---------------------------
     const projectContextText = await getProjectContextText(project_id);
+    const projectArtifactContextText = await getProjectArtifactContextText(project_id);
 
     // ---------------------------
     // Build prompts
@@ -629,11 +659,12 @@ serve(async (req) => {
     const systemPrompt = `
     ${baseSystemPrompt}
 
-    ${projectContextText ? `
+    ${(projectContextText || projectArtifactContextText) ? `
     ================================
-    PROJECT CONTEXT (SOURCE DOCUMENTS)
+    PROJECT CONTEXT (SOURCE DOCUMENTS + PRIOR ARTIFACTS)
     ================================
-    ${projectContextText}
+    ${projectContextText ? projectContextText : ''}
+    ${projectArtifactContextText ? `\n\nPREVIOUS PROJECT ARTIFACTS (REFERENCE)\n${projectArtifactContextText}` : ''}
 
     The following project context documents are AUTHORITATIVE.
 
@@ -641,6 +672,7 @@ serve(async (req) => {
     - You MUST align terminology, scope, and framing to these documents.
     - You MUST NOT introduce features, risks, or themes that contradict them.
     - If the CSV omits rationale, intent, or framing, infer it ONLY from the project documents.
+    - You MUST cross-check against prior project artifacts for consistency and call out contradictions.
     - If the CSV conflicts with the project documents:
       - CSV wins for factual release contents
       - Project documents win for intent, scope, and narrative framing
@@ -667,6 +699,9 @@ Rules:
 - Include ALL selected outputs exactly once.
 - "name" must exactly match selected output labels.
 - Keep outputs in the same order as selected outputs.
+- Each "markdown" value MUST end with a final section headed exactly: "## Conflicts with Context Documents".
+- In that final section, verify the output against uploaded project context documents and prior project artifacts (if provided).
+- If no conflicts exist, explicitly include: "No conflicts identified".
 - Do not include any extra top-level keys.
 `;
 

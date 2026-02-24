@@ -534,6 +534,7 @@ const resolvedInputName =
 // NEW: Fetch project context documents (read-only)
 // =====================================================
 let projectContextText = '';
+let projectArtifactContextText = '';
 
 try {
   const { data: docs, error: docsError } = await supabase
@@ -557,6 +558,33 @@ try {
   }
 } catch (err) {
   console.warn('⚠️ Project document fetch error', err);
+}
+
+try {
+  const { data: artifacts, error: artifactsError } = await supabase
+    .from('project_artifacts')
+    .select('artifact_type, artifact_name, output_data, created_at')
+    .eq('project_id', project_id)
+    .eq('status', 'active')
+    .not('output_data', 'is', null)
+    .neq('artifact_type', 'pm_advisor_feedback')
+    .order('created_at', { ascending: false })
+    .limit(6);
+
+  if (artifactsError) {
+    console.warn('⚠️ Failed to fetch project artifacts', artifactsError);
+  } else if (artifacts && artifacts.length > 0) {
+    projectArtifactContextText =
+      `\n\nPRIOR PROJECT ARTIFACTS (REFERENCE FOR CONSISTENCY):\n` +
+      artifacts
+        .map((a) => {
+          const excerpt = (a.output_data || '').slice(0, 1600);
+          return `\n---\nArtifact: ${a.artifact_name || a.artifact_type} (${a.artifact_type})\n${excerpt}`;
+        })
+        .join('\n');
+  }
+} catch (err) {
+  console.warn('⚠️ Project artifact fetch error', err);
 }
 
 if (isBlank(resolvedInputName)) {
@@ -700,6 +728,9 @@ userMessage += `Project Context:\n- project_id (UUID): ${project_id}\n- project_
 if (projectContextText) {
   userMessage += projectContextText + '\n\n';
 }
+if (projectArtifactContextText) {
+  userMessage += projectArtifactContextText + '\n\n';
+}
 
 // Source of truth blocks
 if (hasEpics) {
@@ -731,6 +762,9 @@ userMessage += `- You MUST return each output as its own section, preceded by a 
 userMessage += `  <!-- OUTPUT: <Output Name> -->\n`;
 userMessage += `- Do NOT add any content before the first OUTPUT marker.\n`;
 userMessage += `- Do NOT merge outputs.\n\n`;
+userMessage += `- Every output MUST end with a final section headed exactly: "## Conflicts with Context Documents".\n`;
+userMessage += `- In that final section, verify the output against uploaded project context documents and prior generated project artifacts provided above.\n`;
+userMessage += `- If no conflicts exist, explicitly write: "No conflicts identified".\n\n`;
 
 for (const out of outputsToGenerate) {
   const spec = OUTPUT_SPECS[out] ?? null;
@@ -762,6 +796,7 @@ for (const out of outputsToGenerate) {
 
   userMessage += `${spec.format}\n\n`;
   userMessage += `Rules:\n${spec.rules.map((r) => `- ${r}`).join('\n')}\n\n`;
+  userMessage += `You MUST end this output with:\n## Conflicts with Context Documents\n...\n\n`;
 }
 
 userMessage += `Quality bar: 8/10+ (traceability to inputs, crisp structure, testable AC, no invented scope).\n`;
