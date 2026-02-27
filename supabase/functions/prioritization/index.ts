@@ -272,13 +272,12 @@ REQUIRED FINAL SECTION:
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'gpt-4o',
+          model: 'gpt-5.2-chat-latest',
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userPrompt },
           ],
-          temperature: 0.6,
-          max_tokens: 3000,
+          max_completion_tokens: 3000,
         }),
       }
     );

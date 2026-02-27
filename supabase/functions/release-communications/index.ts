@@ -715,7 +715,7 @@ Rules:
         Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-5.2-chat-latest',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage },
@@ -749,8 +749,7 @@ Rules:
             },
           },
         },
-        temperature: 0.4, 
-        max_tokens: 4000,
+        max_completion_tokens: 4000,
       }),
     });
 

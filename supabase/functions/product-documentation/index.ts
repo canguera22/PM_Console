@@ -802,7 +802,7 @@ for (const out of outputsToGenerate) {
 userMessage += `Quality bar: 8/10+ (traceability to inputs, crisp structure, testable AC, no invented scope).\n`;
 userMessage += `\nOutput in Markdown optimized for Jira/Confluence copy/paste.\n`;
 
-    console.log('🤖 [OpenAI] Calling GPT-4o...');
+    console.log('🤖 [OpenAI] Calling GPT-5.2 Chat...');
     console.log('📊 [OpenAI] Message length:', userMessage.length);
 
     // Call OpenAI
@@ -813,14 +813,12 @@ userMessage += `\nOutput in Markdown optimized for Jira/Confluence copy/paste.\n
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-5.2-chat-latest',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: userMessage },
         ],
-        // Lower temperature = less fluff, more spec-quality
-        temperature: 0.2,
-        max_tokens: 4500,
+        max_completion_tokens: 4500,
       }),
     });
 
@@ -892,8 +890,7 @@ userMessage += `\nOutput in Markdown optimized for Jira/Confluence copy/paste.\n
           missing_inputs: missingInputs,
           tokens_used: data.usage?.total_tokens,
           duration_ms: duration,
-          model: 'gpt-4o',
-          temperature: 0.2,
+          model: 'gpt-5.2-chat-latest',
         },
         status: 'active',
       })

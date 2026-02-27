@@ -273,12 +273,10 @@ Keep this section to 1-2 sentences.
 async function callOpenAIChat({
   system,
   user,
-  temperature,
   maxTokens,
 }: {
   system: string;
   user: string;
-  temperature: number;
   maxTokens: number;
 }) {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -288,13 +286,12 @@ async function callOpenAIChat({
       'Authorization': `Bearer ${OPENAI_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: 'gpt-5.2-chat-latest',
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: user },
       ],
-      temperature,
-      max_tokens: maxTokens,
+      max_completion_tokens: maxTokens,
     }),
   });
 
@@ -497,14 +494,13 @@ Ignore these unless they reveal a material inconsistency or missing context
 that directly affects clarity, risk, or decision-making.
 `;
 
-    console.log('🤖 [OpenAI] Calling GPT-4o for PM Advisor review...');
+    console.log('🤖 [OpenAI] Calling GPT-5.2 Chat for PM Advisor review...');
     console.log('📊 [OpenAI] Message length:', userMessage.length);
 
     // First pass
     const response = await callOpenAIChat({
       system: SYSTEM_PROMPT,
       user: userMessage,
-      temperature: 0.35,
       maxTokens: 4500,
     });
 
@@ -557,8 +553,7 @@ that directly affects clarity, risk, or decision-making.
           reviewed_artifact_id: artifact_id || null,
           tokens_used: data.usage?.total_tokens,
           duration_ms: duration,
-          model: 'gpt-4o',
-          temperature: 0.35,
+          model: 'gpt-5.2-chat-latest',
           context_documents_used: projectDocsContext ? true : false,
           context_artifacts: included.map((a: any) => ({
             id: a.id,

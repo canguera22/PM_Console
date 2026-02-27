@@ -206,7 +206,7 @@ serve(async (req) => {
     }
     userMessage += `\n\nREQUIRED FINAL SECTION:\n- End the output with exactly this heading: "## Conflicts with Context Documents"\n- In that section, compare your output against uploaded project documents and prior project artifacts provided above.\n- If none conflict, write: "No conflicts identified".`;
 
-    console.log('🤖 [OpenAI] Calling GPT-4o...');
+    console.log('🤖 [OpenAI] Calling GPT-5.2 Chat...');
     console.log('📊 [OpenAI] Message length:', userMessage.length);
 
     // Call OpenAI
@@ -217,13 +217,12 @@ serve(async (req) => {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-5.2-chat-latest',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: userMessage },
         ],
-        temperature: 0.7,
-        max_tokens: 4000,
+        max_completion_tokens: 4000,
       }),
     });
 
