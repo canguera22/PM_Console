@@ -25,6 +25,16 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function compressContextText(text: string, max = 2200): string {
+  const normalized = String(text ?? '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= max) return normalized;
+
+  const head = normalized.slice(0, Math.floor(max * 0.65));
+  const tail = normalized.slice(-Math.floor(max * 0.25));
+  return `${head}\n\n[... truncated ...]\n\n${tail}`;
+}
+
 /* ------------------------------------------------------------------ */
 /* SYSTEM PROMPT */
 /* ------------------------------------------------------------------ */
@@ -133,8 +143,7 @@ const { data: projectDocs, error: docsError } = await supabase
   .eq('project_id', project_id)
   .eq('status', 'active')
   .not('extracted_text', 'is', null)
-  .order('created_at', { ascending: false })
-  .limit(5);
+  .order('created_at', { ascending: false });
 
 if (docsError) {
   console.warn('[DOCS WARNING] Failed to load project documents', docsError);
@@ -146,10 +155,7 @@ const projectDocsContext =
         .filter(d => d.extracted_text && d.extracted_text.trim().length > 0)
         .map(d => {
           const text = d.extracted_text;
-          const snippet =
-            text.length > 3000
-              ? `${text.slice(0, 1500)}\n\n[... truncated ...]\n\n${text.slice(-1000)}`
-              : text;
+          const snippet = compressContextText(text, 2600);
 
           return `### ${d.name}\n${snippet}`;
         })
@@ -163,8 +169,7 @@ const { data: projectArtifacts, error: artifactsError } = await supabase
   .eq('status', 'active')
   .not('output_data', 'is', null)
   .neq('artifact_type', 'pm_advisor_feedback')
-  .order('created_at', { ascending: false })
-  .limit(5);
+  .order('created_at', { ascending: false });
 
 if (artifactsError) {
   console.warn('[ARTIFACTS WARNING] Failed to load project artifacts', artifactsError);
@@ -175,10 +180,7 @@ const projectArtifactsContext =
     ? projectArtifacts
         .map(a => {
           const body = typeof a.output_data === 'string' ? a.output_data : '';
-          const snippet =
-            body.length > 1800
-              ? `${body.slice(0, 1200)}\n\n[... truncated ...]\n\n${body.slice(-400)}`
-              : body;
+          const snippet = compressContextText(body, 1800);
           return `### ${a.artifact_name || a.artifact_type} (${a.artifact_type})\n${snippet}`;
         })
         .join('\n\n')

@@ -43,6 +43,16 @@ function stripLeadingH1(markdown: string): string {
   return markdown.replace(/^#\s+.+\n+/, '').trim();
 }
 
+function compressContextText(text: string, max = 2200): string {
+  const normalized = String(text ?? '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= max) return normalized;
+
+  const head = normalized.slice(0, Math.floor(max * 0.65));
+  const tail = normalized.slice(-Math.floor(max * 0.25));
+  return `${head}\n\n[... truncated ...]\n\n${tail}`;
+}
+
 function extractJsonObject(text: string): Record<string, unknown> | null {
   const trimmed = text.trim();
   try {
@@ -183,7 +193,7 @@ async function getProjectContextText(projectId: string): Promise<string> {
   return data
     .map(
       (doc) =>
-        `### Project Context Document: ${doc.name}\n${doc.extracted_text}`
+        `### Project Context Document: ${doc.name}\n${compressContextText(doc.extracted_text ?? '')}`
     )
     .join('\n\n');
 }
@@ -196,8 +206,7 @@ async function getProjectArtifactContextText(projectId: string): Promise<string>
     .eq('status', 'active')
     .not('output_data', 'is', null)
     .neq('artifact_type', 'pm_advisor_feedback')
-    .order('created_at', { ascending: false })
-    .limit(5);
+    .order('created_at', { ascending: false });
 
   if (error) {
     console.warn('⚠️ Failed to fetch project artifacts', error);
@@ -208,7 +217,7 @@ async function getProjectArtifactContextText(projectId: string): Promise<string>
 
   return data
     .map((artifact) => {
-      const excerpt = (artifact.output_data ?? '').slice(0, 1400);
+      const excerpt = compressContextText(artifact.output_data ?? '', 1800);
       return `### Project Artifact: ${artifact.artifact_name || artifact.artifact_type} (${artifact.artifact_type})\n${excerpt}`;
     })
     .join('\n\n');

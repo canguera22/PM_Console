@@ -19,23 +19,30 @@ function isValidUUID(uuid: string): boolean {
 
 
 
-const SYSTEM_PROMPT = `You are a Meeting Intelligence Analyst specializing in extracting actionable insights from meeting transcripts and are responsible for validating decisions against known constraints.
+const SYSTEM_PROMPT = `You are a Meeting Intelligence Analyst specializing in extracting actionable insights from meeting transcripts and cleaning up rough meeting notes. You are also responsible for validating decisions against known constraints.
 
 Your role:
+- Convert rough notes into polished, structured meeting notes without inventing facts
 - Extract key decisions, action items, and next steps
-- Identify participants and their contributions
+- Identify participants and their contributions when the source content makes them clear
 - Create executive summaries
 - Flag risks, blockers, and dependencies
 - Organize information clearly
 - Explicitly distinguish between proposed decisions and validated decisions
 
 
-When analyzing meetings, you can generate:
+When the input mode is "transcript", produce a full meeting analysis that can include:
 - Executive Summary: High-level overview for stakeholders
 - Action Items: Clear tasks with owners and deadlines
 - Decisions Log: Key decisions made
 - Follow-up Items: Topics requiring further discussion
 - Meeting Notes: Comprehensive notes
+
+When the input mode is "notes_cleanup", produce cleaned and organized notes:
+- Cleaned Notes: Rewrite the raw notes into coherent markdown
+- Action Items: Include only if the notes imply them
+- Decisions and Open Questions: Distinguish confirmed decisions from unresolved items
+- Do not fabricate details that are not present in the raw notes
 
 SOURCE AUTHORITY RULES
 
@@ -79,6 +86,7 @@ serve(async (req) => {
   try {
     const {
       meeting_transcript,
+      input_mode,
       meeting_type,
       project_name,
       participants,
@@ -87,6 +95,7 @@ serve(async (req) => {
     } = await req.json();
 
     console.log('📋 [Payload]', {
+      input_mode,
       meeting_type,
       project_name,
       project_id,
@@ -94,13 +103,37 @@ serve(async (req) => {
       transcript_length: meeting_transcript?.length || 0,
     });
 
+    const normalizedInputMode =
+      input_mode === 'notes_cleanup' ? 'notes_cleanup' : 'transcript';
+
     // Validation
     if (!meeting_transcript) {
-      console.warn('⚠️ [Validation Error] Missing meeting_transcript');
+      console.warn('⚠️ [Validation Error] Missing source content');
       return new Response(
         JSON.stringify({
           error: 'Missing meeting_transcript',
-          details: 'Please provide a meeting transcript to analyze',
+          details:
+            normalizedInputMode === 'notes_cleanup'
+              ? 'Please provide raw meeting notes to clean up'
+              : 'Please provide a meeting transcript to analyze',
+        }),
+        {
+          status: 400,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+          },
+        },
+      );
+    }
+
+    // CRITICAL: Validate project_id is a valid UUID
+    if (!project_id || !isValidUUID(project_id)) {
+      console.warn('⚠️ [Validation Error] Invalid project_id - must be UUID');
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid project_id',
+          details: 'project_id must be a valid UUID string',
         }),
         {
           status: 400,
@@ -140,8 +173,7 @@ serve(async (req) => {
         .eq('status', 'active')
         .not('output_data', 'is', null)
         .neq('artifact_type', 'pm_advisor_feedback')
-        .order('created_at', { ascending: false })
-        .limit(5);
+        .order('created_at', { ascending: false });
 
       if (!artifactsError && artifacts && artifacts.length > 0) {
         projectArtifactContextText =
@@ -153,25 +185,6 @@ serve(async (req) => {
             })
             .join('\n');
       }
-
-
-    // CRITICAL: Validate project_id is a valid UUID
-    if (!project_id || !isValidUUID(project_id)) {
-      console.warn('⚠️ [Validation Error] Invalid project_id - must be UUID');
-      return new Response(
-        JSON.stringify({
-          error: 'Invalid project_id',
-          details: 'project_id must be a valid UUID string',
-        }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          },
-        },
-      );
-    }
 
     // Check OpenAI API key
     if (!OPENAI_API_KEY) {
@@ -192,8 +205,28 @@ serve(async (req) => {
       );
     }
 
+    const modeSpecificInstructions =
+      normalizedInputMode === 'notes_cleanup'
+        ? [
+            'Input mode: notes_cleanup',
+            'Clean up the raw notes into polished, easy-to-scan meeting notes.',
+            'Preserve the original meaning and uncertainty.',
+            'Use markdown headings and bullets.',
+            'If action items are identifiable, include owners only when explicitly present.',
+            'If decisions are uncertain, list them under open questions instead of asserting them as final.',
+            'Recommended sections: ## Executive Summary, ## Cleaned Notes, ## Action Items, ## Decisions and Open Questions.',
+          ].join('\n')
+        : [
+            'Input mode: transcript',
+            'Analyze the transcript and extract structured meeting intelligence.',
+            'Recommended sections: ## Executive Summary, ## Action Items, ## Decisions Log, ## Follow-up Items, ## Meeting Notes.',
+          ].join('\n');
+
+    const sourceLabel =
+      normalizedInputMode === 'notes_cleanup' ? 'raw meeting notes' : 'meeting transcript';
+
     // Build user message
-    let userMessage = `Please analyze this meeting transcript:\n\n${meeting_transcript}${projectContextText}${projectArtifactContextText}`;
+    let userMessage = `Please process this ${sourceLabel}:\n\n${meeting_transcript}\n\n${modeSpecificInstructions}${projectContextText}${projectArtifactContextText}`;
 
     if (meeting_type) {
       userMessage += `\n\nMeeting Type: ${meeting_type}`;
@@ -259,19 +292,28 @@ serve(async (req) => {
         artifact_type: 'meeting_intelligence',
         artifact_name:
           artifact_name ||
-          `Meeting Analysis - ${new Date().toLocaleDateString()}`,
+          `${
+            normalizedInputMode === 'notes_cleanup'
+              ? 'Cleaned Meeting Notes'
+              : 'Meeting Analysis'
+          } - ${new Date().toLocaleDateString()}`,
         input_data: {
-          schema_version: 1,
-          input_mode: 'transcript',
+          schema_version: 2,
+          input_mode: normalizedInputMode,
           input: {
-            meeting_transcript,
+            source_text: meeting_transcript,
+            meeting_transcript:
+              normalizedInputMode === 'transcript' ? meeting_transcript : undefined,
+            raw_notes:
+              normalizedInputMode === 'notes_cleanup' ? meeting_transcript : undefined,
             meeting_type,
             participants,
           },
         },
         output_data: output,
         metadata: {
-          input_schema_version: 1,
+          input_schema_version: 2,
+          input_mode: normalizedInputMode,
           meeting_type,
           participants,
           tokens_used: data.usage?.total_tokens,

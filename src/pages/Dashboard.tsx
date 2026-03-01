@@ -24,10 +24,11 @@ import { ProjectArtifact } from '@/types/project-artifacts';
 import { fetchProjects } from '@/lib/projects';
 import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { Project } from '@/types/project';
+import { ProjectTaskPanel } from '@/components/ProjectTaskPanel';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { activeProject, setActiveProject } = useActiveProject();
+  const { activeProject } = useActiveProject();
 
   const [recentArtifacts, setRecentArtifacts] = useState<ProjectArtifact[]>([]);
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
@@ -198,6 +199,8 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         )}
+
+        <ProjectTaskPanel activeProject={activeProject} compact />
 
         {/* ================= RECENT ACTIVITY ================= */}
         <Card>

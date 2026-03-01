@@ -24,6 +24,7 @@ import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import Papa from 'papaparse';
 import { supabase } from '@/lib/supabase';
+import { completeMatchingTaskForArtifact } from '@/lib/projectTasks';
 
 // Canonical internal output keys (DO NOT use labels for logic)
 const OUTPUT_KEYS = {
@@ -825,6 +826,16 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
         setCurrentSessionId(result.artifact_id);
         setCurrentArtifactVersion(1);
         setLastModifiedBy('agent');
+
+        try {
+          await completeMatchingTaskForArtifact(
+            activeProject.id,
+            'product_documentation',
+            result.artifact_id
+          );
+        } catch (taskError) {
+          console.warn('Failed to auto-complete matching documentation task', taskError);
+        }
       }
 
 

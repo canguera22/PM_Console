@@ -17,6 +17,7 @@ import { useSearchParams } from 'react-router-dom';
 import { uploadProjectDocument } from '@/lib/projectDocuments';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { ProjectTaskPanel } from '@/components/ProjectTaskPanel';
 
 
 
@@ -363,6 +364,10 @@ const toggleSection = (type: string) => {
               meta={getActivityMeta('prioritization').deltaLabel}
             />
         </div>
+      </div>
+
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-2">
+        <ProjectTaskPanel activeProject={activeProject} />
       </div>
 
       {/* Project Context Documents */}

@@ -1,8 +1,11 @@
+export type MeetingInputMode = 'transcript' | 'notes_cleanup';
+
 export interface MeetingSession {
   id: string;
   created_at: string;
   artifact_name?: string | null;
   created_by_email?: string | null;
+  input_mode: MeetingInputMode;
   meeting_type: string | null;
   project_name: string | null;
   participants: string | null;

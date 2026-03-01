@@ -49,6 +49,7 @@ import type {
 import { Lightbulb } from 'lucide-react';
 import { callPMAdvisorAgent } from '@/lib/pm-advisor';
 import { useSearchParams } from 'react-router-dom';
+import { completeMatchingTaskForArtifact } from '@/lib/projectTasks';
 
 
 
@@ -547,6 +548,18 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
       // Save to database with project_id
       console.log('💾 [Database] Saving to project_artifacts...');
       setCurrentArtifactId(result.artifact_id ?? null);
+
+      if (result.artifact_id && activeProject) {
+        try {
+          await completeMatchingTaskForArtifact(
+            activeProject.id,
+            'prioritization',
+            result.artifact_id
+          );
+        } catch (taskError) {
+          console.warn('Failed to auto-complete matching prioritization task', taskError);
+        }
+      }
 
 
       console.log('💾 [Database] Saved successfully');

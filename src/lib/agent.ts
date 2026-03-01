@@ -6,6 +6,7 @@ export interface MeetingAnalysisInput {
   project_id: string;
 
   meeting_transcript: string;
+  input_mode?: 'transcript' | 'notes_cleanup';
 
   // optional context
   meeting_type?: string;

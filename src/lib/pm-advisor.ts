@@ -46,26 +46,26 @@ export async function callPMAdvisorAgent(input: PMAdvisorInput): Promise<PMAdvis
 
 /**
  * ✅ Fetch context artifacts (using new `project_artifacts` table)
- * Returns the latest artifact of each type for the given project
+ * Returns all active artifacts of each type for the given project
  */
 export async function fetchContextArtifacts(projectId: string): Promise<ContextArtifacts> {
   try {
     const [doc, meeting, prio, release] = await Promise.all([
       supabaseFetch<any[]>(
-        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.product_documentation&order=created_at.desc&limit=1`
-      ).then((data) => data[0] || null).catch(() => null),
+        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.product_documentation&status=eq.active&order=created_at.desc`
+      ).then((data) => data || []).catch(() => []),
 
       supabaseFetch<any[]>(
-        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.meeting_intelligence&order=created_at.desc&limit=1`
-      ).then((data) => data[0] || null).catch(() => null),
+        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.meeting_intelligence&status=eq.active&order=created_at.desc`
+      ).then((data) => data || []).catch(() => []),
 
       supabaseFetch<any[]>(
-        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.prioritization&order=created_at.desc&limit=1`
-      ).then((data) => data[0] || null).catch(() => null),
+        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.prioritization&status=eq.active&order=created_at.desc`
+      ).then((data) => data || []).catch(() => []),
 
       supabaseFetch<any[]>(
-        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.release_communications&order=created_at.desc&limit=1`
-      ).then((data) => data[0] || null).catch(() => null),
+        `/project_artifacts?project_id=eq.${projectId}&artifact_type=eq.release_communications&status=eq.active&order=created_at.desc`
+      ).then((data) => data || []).catch(() => []),
     ]);
 
     return {

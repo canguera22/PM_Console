@@ -360,14 +360,14 @@ serve(async (req) => {
     }
 
     // Fetch artifacts for this project (canonical context)
-    // Exclude pm_advisor artifacts from context to prevent recursive loops
-    console.log('🔍 [Database] Fetching project artifacts (excluding pm_advisor)...');
+    // Exclude prior PM Advisor feedback artifacts to prevent recursive loops
+    console.log('🔍 [Database] Fetching project artifacts (excluding PM Advisor feedback)...');
     const { data: rawArtifacts, error: fetchError } = await supabase
       .from('project_artifacts')
       .select('*')
       .eq('project_id', project_id)
       .eq('status', 'active')
-      .neq('artifact_type', 'pm_advisor')
+      .neq('artifact_type', 'pm_advisor_feedback')
       .order('created_at', { ascending: false });
 
 
@@ -381,8 +381,7 @@ serve(async (req) => {
         .eq('project_id', project_id)
         .eq('status', 'active')
         .not('extracted_text', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(3);
+        .order('created_at', { ascending: false });
 
       if (docsError) {
         console.warn('⚠️ Failed to load project documents', docsError);
@@ -392,13 +391,9 @@ serve(async (req) => {
       Array.isArray(projectDocs) && projectDocs.length > 0
         ? projectDocs
             .filter(d => d.extracted_text && d.extracted_text.trim().length > 0)
-            .slice(0, 3) 
             .map(d => {
               const text = d.extracted_text!;
-              const snippet =
-                text.length > 3000
-                  ? `${text.slice(0, 1500)}\n\n[... truncated ...]\n\n${text.slice(-1000)}`
-                  : text;
+              const snippet = compressLargeArtifact(text, 1800, 700);
 
               return `### ${d.name}\n${snippet}`;
             })
@@ -441,9 +436,8 @@ serve(async (req) => {
     // Compress very large artifacts
     const artifactForPrompt = compressLargeArtifact(artifactToReview);
 
-    // Pick context artifacts by type (best-of)
-    const pickedContext = pickArtifactsByType(allArtifacts, 1, 5);
-    const { indexText, included } = buildArtifactIndex(pickedContext);
+    const backgroundArtifacts = allArtifacts.filter((a: any) => a.id !== artifact_id);
+    const { indexText, included } = buildArtifactIndex(backgroundArtifacts);
 
     // Build user message (tight + architecture-grounded)
     let userMessage = `You are reviewing a PM artifact for clarity, alignment, and decision-readiness.
@@ -487,7 +481,7 @@ ${projectDocsContext}
 
 userMessage += `
 
-## Optional Background Artifacts
+## Background Artifacts (all active project artifacts)
 ${indexText}
 
 Ignore these unless they reveal a material inconsistency or missing context
@@ -532,7 +526,7 @@ that directly affects clarity, risk, or decision-making.
       .insert({
         project_id: project_id,
         project_name: project_name || 'Unknown Project',
-        artifact_type: 'pm_advisor',
+        artifact_type: 'pm_advisor_feedback',
         artifact_name:
           artifact_name ||
           `PM Advisor Review - ${module_type || 'unknown'} - ${new Date().toLocaleDateString()}`,
@@ -541,7 +535,7 @@ that directly affects clarity, risk, or decision-making.
           reviewed_artifact_type: artifact_type || null,
           module_type: module_type || null,
           selected_outputs: Array.isArray(selected_outputs) ? selected_outputs : null,
-          context_artifacts_count: pickedContext.length,
+          context_artifacts_count: included.length,
           included_context_artifact_ids: included.map((a: any) => a.id),
           function_version: FUNCTION_VERSION,
         },
@@ -580,7 +574,7 @@ that directly affects clarity, risk, or decision-making.
       JSON.stringify({
         output,
         artifact_id: advisorArtifact?.id,
-        context_artifacts_count: pickedContext.length,
+        context_artifacts_count: included.length,
         function_version: FUNCTION_VERSION,
       }),
       { status: 200, headers: corsHeaders() }

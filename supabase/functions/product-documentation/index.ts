@@ -363,6 +363,16 @@ function buildMissingInputs(payload: Record<string, unknown>): string[] {
 // -----------------------------
 const normalize = (v: any) => (v === null || v === undefined ? '' : String(v)).trim();
 
+function compressContextText(text: string, max = 2400): string {
+  const normalized = String(text ?? '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= max) return normalized;
+
+  const head = normalized.slice(0, Math.floor(max * 0.65));
+  const tail = normalized.slice(-Math.floor(max * 0.25));
+  return `${head}\n\n[... truncated ...]\n\n${tail}`;
+}
+
 const issueTypeKey = (row: any) =>
   normalize(row['Issue Type'] ?? row['IssueType'] ?? row['Type'] ?? row['type']);
 
@@ -552,7 +562,7 @@ try {
       docs
         .map(
           (d) =>
-            `\n---\nDocument: ${d.name}\n${d.extracted_text}`
+            `\n---\nDocument: ${d.name}\n${compressContextText(d.extracted_text ?? '', 2600)}`
         )
         .join('\n');
   }
@@ -568,8 +578,7 @@ try {
     .eq('status', 'active')
     .not('output_data', 'is', null)
     .neq('artifact_type', 'pm_advisor_feedback')
-    .order('created_at', { ascending: false })
-    .limit(6);
+    .order('created_at', { ascending: false });
 
   if (artifactsError) {
     console.warn('⚠️ Failed to fetch project artifacts', artifactsError);
@@ -578,7 +587,7 @@ try {
       `\n\nPRIOR PROJECT ARTIFACTS (REFERENCE FOR CONSISTENCY):\n` +
       artifacts
         .map((a) => {
-          const excerpt = (a.output_data || '').slice(0, 1600);
+          const excerpt = compressContextText(a.output_data || '', 1800);
           return `\n---\nArtifact: ${a.artifact_name || a.artifact_type} (${a.artifact_type})\n${excerpt}`;
         })
         .join('\n');

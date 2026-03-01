@@ -13,7 +13,7 @@ import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, ArrowRight, Loader2, Copy, CheckCircle2 } from 'lucide-react';
 import { analyzeMeeting } from '@/lib/agent';
 import { supabaseFetch } from '@/lib/supabase';
-import { MeetingSession, MEETING_TYPES, ProjectArtifactRow } from '@/types/meeting';
+import { MeetingInputMode, MeetingSession, MEETING_TYPES, ProjectArtifactRow } from '@/types/meeting';
 import { SampleTranscriptDialog } from '@/components/SampleTranscriptDialog';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import ReactMarkdown from 'react-markdown';
@@ -21,6 +21,7 @@ import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { useSearchParams } from 'react-router-dom';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
+import { completeMatchingTaskForArtifact } from '@/lib/projectTasks';
 
 
 export default function MeetingIntelligence() {
@@ -33,6 +34,7 @@ export default function MeetingIntelligence() {
 
   // Form state
   const [transcript, setTranscript] = useState('');
+  const [inputMode, setInputMode] = useState<MeetingInputMode>('transcript');
   const [meetingType, setMeetingType] = useState<string>('');
   const [projectName, setProjectName] = useState('');
   const [participants, setParticipants] = useState('');
@@ -104,16 +106,25 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     const input = a.input_data ?? {};
     const nestedInput = (input.input ?? {}) as Record<string, unknown>;
     const metadata = (a.metadata ?? {}) as Record<string, any>;
+    const inputMode =
+      input.input_mode === 'notes_cleanup' ? 'notes_cleanup' : 'transcript';
+    const sourceText =
+      (nestedInput.source_text as string) ??
+      (input.meeting_transcript as string) ??
+      (nestedInput.meeting_transcript as string) ??
+      (nestedInput.raw_notes as string) ??
+      '';
 
     return {
       id: a.id,
       created_at: a.created_at,
       artifact_name: a.artifact_name,
       created_by_email: a.created_by_email ?? null,
+      input_mode: inputMode,
       meeting_type: (input.meeting_type as string) ?? (nestedInput.meeting_type as string) ?? null,
       project_name: a.project_name ?? null,
       participants: (input.participants as string) ?? (nestedInput.participants as string) ?? null,
-      transcript: (input.meeting_transcript as string) ?? (nestedInput.meeting_transcript as string) ?? '',
+      transcript: sourceText,
       output: a.output_data ?? null,
       metadata,
       version: metadata.version ?? 1, 
@@ -170,7 +181,10 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     setError(null);
 
     if (!transcript.trim()) {
-      const msg = 'Please enter a meeting transcript';
+      const msg =
+        inputMode === 'notes_cleanup'
+          ? 'Please enter your raw notes'
+          : 'Please enter a meeting transcript';
       setError(msg);
       toast({ title: 'Validation Error', description: msg, variant: 'destructive' });
       return;
@@ -190,6 +204,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
 
     console.log('👤 [User Action] Clicked "Analyze Meeting" button');
     console.log('📝 [Input Data]', {
+      inputMode,
       transcript: transcript.substring(0, 100) + '...',
       transcriptLength: transcript.length,
       meetingType,
@@ -209,6 +224,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
           project_name: effectiveProjectName || undefined,
           artifact_name: artifactName,
           meeting_transcript: transcript,
+          input_mode: inputMode,
           meeting_type: meetingType || undefined,
           participants: participants || undefined,
           persist_artifact: true,
@@ -218,6 +234,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
             project_id: activeProject.id,
             project_name: effectiveProjectName || undefined,
             meeting_transcript: transcript,
+            input_mode: inputMode,
             meeting_type: meetingType || undefined,
             participants: participants || undefined,
             artifact_name: artifactName,
@@ -228,6 +245,18 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       setCurrentOutput(result.output);
       setCurrentArtifactId(result.artifact_id ?? null);
 
+      if (result.artifact_id) {
+        try {
+          await completeMatchingTaskForArtifact(
+            activeProject.id,
+            'meeting_intelligence',
+            result.artifact_id
+          );
+        } catch (taskError) {
+          console.warn('Failed to auto-complete matching meeting task', taskError);
+        }
+      }
+
       console.log('💾 [Database] Saving to project_artifacts table...');
       console.log('💾 [Database] Saved successfully');
 
@@ -235,7 +264,10 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
 
       toast({
         title: 'Success',
-        description: 'Meeting analyzed successfully',
+        description:
+          inputMode === 'notes_cleanup'
+            ? 'Notes cleaned up successfully'
+            : 'Meeting analyzed successfully',
       });
     } catch (err: any) {
       console.error('💥 [Error Handler] Caught error:', err);
@@ -320,6 +352,11 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
   const loadSession = (session: MeetingSession) => {
     setCurrentArtifactId(session.id); 
     setCurrentOutput(session.output ?? '');
+    setTranscript(session.transcript ?? '');
+    setInputMode(session.input_mode);
+    setMeetingType(session.meeting_type ?? '');
+    setProjectName(session.artifact_name ?? session.project_name ?? '');
+    setParticipants(session.participants ?? '');
 
     
     // Reset editing state
@@ -349,6 +386,25 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     }).format(date);
   };
 
+  const isNotesCleanupMode = inputMode === 'notes_cleanup';
+  const inputCardTitle = isNotesCleanupMode ? 'Note Cleanup' : 'Meeting Transcript';
+  const inputCardDescription = isNotesCleanupMode
+    ? 'Paste rough meeting notes and the agent will clean them into organized notes'
+    : 'Paste your meeting transcript and provide optional context';
+  const inputLabel = isNotesCleanupMode ? 'Raw Notes' : 'Meeting Transcript';
+  const inputPlaceholder = isNotesCleanupMode
+    ? 'Paste your rough notes here. Bullet fragments and shorthand are fine.'
+    : 'Paste your meeting transcript here...';
+  const runButtonLabel = isNotesCleanupMode ? 'Clean Up Notes' : 'Analyze Meeting';
+  const runButtonBusyLabel = isNotesCleanupMode
+    ? 'Cleaning up your notes...'
+    : 'Analyzing your meeting...';
+  const emptyStateLabel = isNotesCleanupMode
+    ? 'No results yet. Enter raw notes and click "Clean Up Notes".'
+    : 'No analysis yet. Enter a transcript and click "Analyze Meeting".';
+  const sessionModeLabel = (mode: MeetingInputMode) =>
+    mode === 'notes_cleanup' ? 'Notes Cleanup' : 'Transcript';
+
   return (
     <div className="min-h-screen bg-[#F9FAFB]">
       {/* Header */}
@@ -368,7 +424,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
               <Separator orientation="vertical" className="h-6" />
               <div>
                 <h1 className="text-xl font-semibold text-[#111827]">Meeting Intelligence</h1>
-                <p className="text-sm text-[#6B7280]">AI-powered meeting analysis</p>
+                <p className="text-sm text-[#6B7280]">AI-powered meeting analysis and note cleanup</p>
               </div>
             </div>
           </div>
@@ -414,10 +470,10 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                 <CardHeader className="flex flex-row items-center justify-between pb-4">
                   <div>
                     <CardTitle className="text-lg font-semibold text-[#111827]">
-                      Meeting Transcript
+                      {inputCardTitle}
                     </CardTitle>
                     <CardDescription className="mt-1.5 text-sm text-[#6B7280]">
-                      Paste your meeting transcript and provide optional context
+                      {inputCardDescription}
                     </CardDescription>
                   </div>
 
@@ -432,12 +488,27 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
 
                   <CardContent className="flex-1 overflow-auto space-y-5">
                     <div className="space-y-2">
+                      <Label className="text-[13px] font-medium text-[#6B7280]">
+                        Input Mode
+                      </Label>
+                      <Tabs
+                        value={inputMode}
+                        onValueChange={(value) => setInputMode(value as MeetingInputMode)}
+                      >
+                        <TabsList className="grid w-full grid-cols-2">
+                          <TabsTrigger value="transcript">Meeting Transcript</TabsTrigger>
+                          <TabsTrigger value="notes_cleanup">Notes Cleanup</TabsTrigger>
+                        </TabsList>
+                      </Tabs>
+                    </div>
+
+                    <div className="space-y-2">
                       <Label htmlFor="transcript" className="text-[13px] font-medium text-[#6B7280]">
-                        Meeting Transcript <span className="text-[#EF4444]">*</span>
+                        {inputLabel} <span className="text-[#EF4444]">*</span>
                       </Label>
                       <Textarea
                         id="transcript"
-                        placeholder="Paste your meeting notes or transcript here..."
+                        placeholder={inputPlaceholder}
                         value={transcript}
                         onChange={(e) => setTranscript(e.target.value)}
                         className="min-h-[300px] font-mono text-sm"
@@ -499,10 +570,10 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                       {isAnalyzing ? (
                         <>
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Analyzing your meeting...
+                          {runButtonBusyLabel}
                         </>
                       ) : (
-                        'Analyze Meeting'
+                        runButtonLabel
                       )}
                     </Button>
                   </CardContent>
@@ -629,7 +700,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                     ) : (
                       <div className="flex min-h-[400px] items-center justify-center rounded-lg border-2 border-dashed border-[#E5E7EB]">
                         <p className="text-sm text-[#9CA3AF]">
-                          No analysis yet. Enter a transcript and click "Analyze Meeting".
+                          {emptyStateLabel}
                         </p>
                       </div>
                     )}
@@ -657,7 +728,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                             timestamp={formatDate(session.created_at)}
                             description={session.transcript ? `${session.transcript.substring(0, 100)}...` : undefined}
                             metaLine={`Created by: ${session.created_by_email ?? 'Unknown'}`}
-                            badges={session.meeting_type ? [session.meeting_type] : []}
+                            badges={[sessionModeLabel(session.input_mode), ...(session.meeting_type ? [session.meeting_type] : [])]}
                             rightBadge={session.version > 1 ? `v${session.version} · Edited` : undefined}
                             onClick={() => {
                               setSearchParams({ artifact: session.id });
