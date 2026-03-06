@@ -21,7 +21,6 @@ import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { useSearchParams } from 'react-router-dom';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
-import { completeMatchingTaskForArtifact } from '@/lib/projectTasks';
 
 
 export default function MeetingIntelligence() {
@@ -244,18 +243,6 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       console.log('✨ [Success] Received AI-generated output', { outputLength: result.output.length });
       setCurrentOutput(result.output);
       setCurrentArtifactId(result.artifact_id ?? null);
-
-      if (result.artifact_id) {
-        try {
-          await completeMatchingTaskForArtifact(
-            activeProject.id,
-            'meeting_intelligence',
-            result.artifact_id
-          );
-        } catch (taskError) {
-          console.warn('Failed to auto-complete matching meeting task', taskError);
-        }
-      }
 
       console.log('💾 [Database] Saving to project_artifacts table...');
       console.log('💾 [Database] Saved successfully');

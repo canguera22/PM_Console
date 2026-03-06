@@ -15,8 +15,6 @@ ALTER TABLE public.projects
   ALTER COLUMN owner_user_id SET DEFAULT auth.uid();
 
 DROP INDEX IF EXISTS idx_projects_name_unique;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_owner_name_unique
-  ON public.projects(owner_user_id, name);
 
 -- -----------------------------
 -- Project members table
@@ -143,6 +141,7 @@ CREATE OR REPLACE FUNCTION public.prevent_non_owner_owner_change()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.owner_user_id IS DISTINCT FROM OLD.owner_user_id
+     AND auth.uid() IS NOT NULL
      AND NOT public.is_project_owner(OLD.id) THEN
     RAISE EXCEPTION 'Only project owner can change owner_user_id';
   END IF;
@@ -171,6 +170,28 @@ WHERE p.owner_user_id IS NOT NULL
 ON CONFLICT (project_id, user_id) DO UPDATE
 SET role = 'owner', updated_at = NOW();
 
+-- Resolve duplicate project names per owner before enforcing unique constraint.
+WITH ranked_projects AS (
+  SELECT
+    id,
+    owner_user_id,
+    name,
+    ROW_NUMBER() OVER (
+      PARTITION BY owner_user_id, name
+      ORDER BY created_at ASC, id ASC
+    ) AS rn
+  FROM public.projects
+  WHERE owner_user_id IS NOT NULL
+)
+UPDATE public.projects p
+SET name = p.name || ' [' || LEFT(p.id::text, 8) || ']'
+FROM ranked_projects rp
+WHERE p.id = rp.id
+  AND rp.rn > 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_owner_name_unique
+  ON public.projects(owner_user_id, name);
+
 -- -----------------------------
 -- Enable RLS + replace demo-open policies
 -- -----------------------------
@@ -183,6 +204,12 @@ ALTER TABLE public.project_documents ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Demo open read projects" ON public.projects;
 DROP POLICY IF EXISTS "Demo open insert projects" ON public.projects;
 DROP POLICY IF EXISTS "Demo open update projects" ON public.projects;
+DROP POLICY IF EXISTS "Allow anonymous read access to projects" ON public.projects;
+DROP POLICY IF EXISTS "Allow authenticated read access to projects" ON public.projects;
+DROP POLICY IF EXISTS "Allow anonymous insert to projects" ON public.projects;
+DROP POLICY IF EXISTS "Allow authenticated insert to projects" ON public.projects;
+DROP POLICY IF EXISTS "Allow anonymous update to projects" ON public.projects;
+DROP POLICY IF EXISTS "Allow authenticated update to projects" ON public.projects;
 DROP POLICY IF EXISTS "Service role full access projects" ON public.projects;
 DROP POLICY IF EXISTS "Authenticated members can read projects" ON public.projects;
 DROP POLICY IF EXISTS "Authenticated users can create own projects" ON public.projects;
@@ -250,6 +277,12 @@ CREATE POLICY "Service role full access project members"
 DROP POLICY IF EXISTS "Demo open read project artifacts" ON public.project_artifacts;
 DROP POLICY IF EXISTS "Demo open insert project artifacts" ON public.project_artifacts;
 DROP POLICY IF EXISTS "Demo open update project artifacts" ON public.project_artifacts;
+DROP POLICY IF EXISTS "Allow anonymous read access to artifacts" ON public.project_artifacts;
+DROP POLICY IF EXISTS "Allow authenticated read access to artifacts" ON public.project_artifacts;
+DROP POLICY IF EXISTS "Allow anonymous insert to artifacts" ON public.project_artifacts;
+DROP POLICY IF EXISTS "Allow authenticated insert to artifacts" ON public.project_artifacts;
+DROP POLICY IF EXISTS "Allow anonymous update to artifacts" ON public.project_artifacts;
+DROP POLICY IF EXISTS "Allow authenticated update to artifacts" ON public.project_artifacts;
 DROP POLICY IF EXISTS "Service role full access project artifacts" ON public.project_artifacts;
 DROP POLICY IF EXISTS "Members can read project artifacts" ON public.project_artifacts;
 DROP POLICY IF EXISTS "Members can insert project artifacts" ON public.project_artifacts;

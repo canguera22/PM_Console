@@ -28,7 +28,7 @@ import { ProjectTaskPanel } from '@/components/ProjectTaskPanel';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { activeProject } = useActiveProject();
+  const { activeProject, setActiveProject } = useActiveProject();
 
   const [recentArtifacts, setRecentArtifacts] = useState<ProjectArtifact[]>([]);
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
@@ -200,89 +200,90 @@ export default function Dashboard() {
           </Card>
         )}
 
-        <ProjectTaskPanel activeProject={activeProject} compact />
+        <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+          <ProjectTaskPanel activeProject={activeProject} compact />
 
-        {/* ================= RECENT ACTIVITY ================= */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <CardTitle className="text-lg">
-                  Recent Activity
-                </CardTitle>
-                <CardDescription>
-                  Latest outputs across modules in this project
-                </CardDescription>
-              </div>
-
-              <Button
-                variant="outline"
-                onClick={() => navigate('/dashboard')}
-                className="flex items-center gap-2"
-              >
-                View Project Dashboard
-                <ArrowRight className="w-4 h-4" />
-              </Button>
-            </div>
-          </CardHeader>
-
-          <CardContent className="space-y-3">
-            {isLoadingActivity && (
-              <p className="text-sm text-muted-foreground">
-                Loading recent activity…
-              </p>
-            )}
-
-            {!isLoadingActivity && recentArtifacts.length === 0 && (
-              <div className="text-sm text-muted-foreground border rounded-md p-4">
-                No recent activity yet. Artifacts you generate will appear here.
-              </div>
-            )}
-
-            {recentArtifacts.map((artifact) => {
-              const route = getArtifactRoute(
-                artifact.artifact_type,
-                artifact.id
-              );
-
-              return (
-                <div
-                  key={artifact.id}
-                  onClick={() => {
-                    if (route) navigate(route);
-                  }}
-                  className="flex items-center justify-between rounded-md border p-3 cursor-pointer hover:bg-muted/50 transition"
-                >
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">
-                      {getArtifactDisplayName(artifact)}
-                    </p>
-
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span className="capitalize">
-                        {artifact.artifact_type.replace('_', ' ')}
-                      </span>
-                      <span>•</span>
-                      <span>{formatRelativeTime(artifact.created_at)}</span>
-                      <span>•</span>
-                      <span>Created by: {artifact.created_by_email ?? 'Unknown'}</span>
-                    </div>
-                  </div>
-
-                  {artifact.advisor_feedback && (
-                    <Badge
-                      variant="outline"
-                      className="bg-[#DDD6FE] text-[#5B21B6] border-[#DDD6FE]"
-                    >
-                      Advisor Reviewed
-                    </Badge>
-                  )}
+          {/* ================= RECENT ACTIVITY ================= */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-lg">
+                    Recent Activity
+                  </CardTitle>
+                  <CardDescription>
+                    Latest outputs across modules in this project
+                  </CardDescription>
                 </div>
-              );
-            })}
 
-          </CardContent>
-        </Card>
+                <Button
+                  variant="outline"
+                  onClick={() => navigate('/dashboard')}
+                  className="flex items-center gap-2"
+                >
+                  View Project Dashboard
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </CardHeader>
+
+            <CardContent className="space-y-3">
+              {isLoadingActivity && (
+                <p className="text-sm text-muted-foreground">
+                  Loading recent activity…
+                </p>
+              )}
+
+              {!isLoadingActivity && recentArtifacts.length === 0 && (
+                <div className="text-sm text-muted-foreground border rounded-md p-4">
+                  No recent activity yet. Artifacts you generate will appear here.
+                </div>
+              )}
+
+              {recentArtifacts.map((artifact) => {
+                const route = getArtifactRoute(
+                  artifact.artifact_type,
+                  artifact.id
+                );
+
+                return (
+                  <div
+                    key={artifact.id}
+                    onClick={() => {
+                      if (route) navigate(route);
+                    }}
+                    className="flex items-center justify-between rounded-md border p-3 cursor-pointer hover:bg-muted/50 transition"
+                  >
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">
+                        {getArtifactDisplayName(artifact)}
+                      </p>
+
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="capitalize">
+                          {artifact.artifact_type.replace('_', ' ')}
+                        </span>
+                        <span>•</span>
+                        <span>{formatRelativeTime(artifact.created_at)}</span>
+                        <span>•</span>
+                        <span>Created by: {artifact.created_by_email ?? 'Unknown'}</span>
+                      </div>
+                    </div>
+
+                    {artifact.advisor_feedback && (
+                      <Badge
+                        variant="outline"
+                        className="bg-[#DDD6FE] text-[#5B21B6] border-[#DDD6FE]"
+                      >
+                        Advisor Reviewed
+                      </Badge>
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        </div>
 
         {/* ================= MODULES ================= */}
         <div>
@@ -293,7 +294,7 @@ export default function Dashboard() {
             Choose what you want to work on next
           </p>
 
-          <div className="grid gap-6 sm:grid-cols-2">
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
             {modules.map((module) => {
               const Icon = module.icon;
               return (
@@ -303,8 +304,8 @@ export default function Dashboard() {
                   onClick={() => navigate(module.path)}
                 >
                   <CardHeader className="p-6">
-                    <div className="flex items-start justify-between">
-                      <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-[#DBEAFE]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-[#DBEAFE]">
                         <Icon className="h-7 w-7 text-[#3B82F6]" />
                       </div>
                       {module.hasPMAdvisor && (
@@ -317,10 +318,10 @@ export default function Dashboard() {
                       )}
                     </div>
 
-                    <CardTitle className="mt-5 text-lg font-semibold">
+                    <CardTitle className="mt-5 text-base font-semibold leading-snug min-h-[48px]">
                       {module.title}
                     </CardTitle>
-                    <CardDescription className="mt-2 text-sm">
+                    <CardDescription className="mt-2 text-sm min-h-[60px]">
                       {module.description}
                     </CardDescription>
                   </CardHeader>

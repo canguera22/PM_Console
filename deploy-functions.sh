@@ -6,7 +6,6 @@
 set -e
 
 CLOUD_URL="https://9ac0aa46-7dc.db-pool-europe-west1.altan.ai"
-ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjIwODA1NjY0NzMsImlhdCI6MTc2NTIwNjQ3MywiaXNzIjoic3VwYWJhc2UiLCJyb2xlIjoiYW5vbiJ9.07VDesnEKixpthe6V1k3QwrOtpvVGLBW8QZYf4E5y4c"
 
 echo "🚀 Deploying Supabase Edge Functions to Altan Cloud..."
 

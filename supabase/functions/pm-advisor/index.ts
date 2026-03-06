@@ -20,6 +20,61 @@ function isValidUUID(uuid: string): boolean {
   return uuidRegex.test(uuid);
 }
 
+async function requireProjectAccess(req: Request, projectId: string): Promise<Response | null> {
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
+  const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+
+  if (!token) {
+    return new Response(JSON.stringify({ error: 'Missing bearer token' }), {
+      status: 401,
+      headers: corsHeaders(),
+    });
+  }
+
+  const { data: userData, error: userError } = await supabase.auth.getUser(token);
+  const userId = userData.user?.id;
+
+  if (userError || !userId) {
+    return new Response(JSON.stringify({ error: 'Invalid authentication token' }), {
+      status: 401,
+      headers: corsHeaders(),
+    });
+  }
+
+  const [{ data: ownedProject, error: ownerError }, { data: membership, error: memberError }] =
+    await Promise.all([
+      supabase
+        .from('projects')
+        .select('id')
+        .eq('id', projectId)
+        .eq('owner_user_id', userId)
+        .maybeSingle(),
+      supabase
+        .from('project_members')
+        .select('project_id')
+        .eq('project_id', projectId)
+        .eq('user_id', userId)
+        .maybeSingle(),
+    ]);
+
+  if (ownerError || memberError) {
+    console.error('❌ [Auth Error] Failed to validate project access', { ownerError, memberError });
+    return new Response(JSON.stringify({ error: 'Unable to validate project access' }), {
+      status: 500,
+      headers: corsHeaders(),
+    });
+  }
+
+  if (!ownedProject && !membership) {
+    return new Response(JSON.stringify({ error: 'Forbidden: project access denied' }), {
+      status: 403,
+      headers: corsHeaders(),
+    });
+  }
+
+  return null;
+}
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -344,6 +399,11 @@ serve(async (req) => {
         }),
         { status: 400, headers: corsHeaders() }
       );
+    }
+
+    const accessError = await requireProjectAccess(req, project_id);
+    if (accessError) {
+      return accessError;
     }
 
     // OpenAI key check

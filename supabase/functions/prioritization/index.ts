@@ -15,6 +15,49 @@ function isValidUUID(uuid: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid);
 }
 
+async function requireProjectAccess(req: Request, projectId: string): Promise<Response | null> {
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
+  const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+
+  if (!token) {
+    return jsonResponse({ error: 'Missing bearer token' }, 401);
+  }
+
+  const { data: userData, error: userError } = await supabase.auth.getUser(token);
+  const userId = userData.user?.id;
+
+  if (userError || !userId) {
+    return jsonResponse({ error: 'Invalid authentication token' }, 401);
+  }
+
+  const [{ data: ownedProject, error: ownerError }, { data: membership, error: memberError }] =
+    await Promise.all([
+      supabase
+        .from('projects')
+        .select('id')
+        .eq('id', projectId)
+        .eq('owner_user_id', userId)
+        .maybeSingle(),
+      supabase
+        .from('project_members')
+        .select('project_id')
+        .eq('project_id', projectId)
+        .eq('user_id', userId)
+        .maybeSingle(),
+    ]);
+
+  if (ownerError || memberError) {
+    console.error('❌ [Auth Error] Failed to validate project access', { ownerError, memberError });
+    return jsonResponse({ error: 'Unable to validate project access' }, 500);
+  }
+
+  if (!ownedProject && !membership) {
+    return jsonResponse({ error: 'Forbidden: project access denied' }, 403);
+  }
+
+  return null;
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -133,6 +176,11 @@ serve(async (req) => {
         { error: 'project_id must be a valid UUID' },
         400
       );
+    }
+
+    const accessError = await requireProjectAccess(req, project_id);
+    if (accessError) {
+      return accessError;
     }
   
   /* ---------------- Load Project Context Documents ---------------- */

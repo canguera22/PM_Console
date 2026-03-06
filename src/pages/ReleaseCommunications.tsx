@@ -38,7 +38,6 @@ import { ErrorDisplay } from '@/components/ErrorDisplay';
 ///import { fetchContextArtifacts } from '@/lib/context-artifacts';
 import { callPMAdvisorAgent } from '@/lib/pm-advisor';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
-import { completeMatchingTaskForArtifact } from '@/lib/projectTasks';
 
 
 // project_artifacts row shape (based on your schema)
@@ -537,18 +536,6 @@ export default function ReleaseCommunications() {
       setAdvisorOutput('');
 
       setCurrentArtifactId(result.artifact_id ?? null);
-
-      if (result.artifact_id && activeProject) {
-        try {
-          await completeMatchingTaskForArtifact(
-            activeProject.id,
-            'release_communications',
-            result.artifact_id
-          );
-        } catch (taskError) {
-          console.warn('Failed to auto-complete matching release task', taskError);
-        }
-      }
 
       await loadSessions();
 

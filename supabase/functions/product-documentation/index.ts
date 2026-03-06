@@ -390,6 +390,61 @@ function isValidUUID(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+async function requireProjectAccess(req: Request, projectId: string): Promise<Response | null> {
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
+  const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+
+  if (!token) {
+    return new Response(JSON.stringify({ error: 'Missing bearer token' }), {
+      status: 401,
+      headers: corsHeaders,
+    });
+  }
+
+  const { data: userData, error: userError } = await supabase.auth.getUser(token);
+  const userId = userData.user?.id;
+
+  if (userError || !userId) {
+    return new Response(JSON.stringify({ error: 'Invalid authentication token' }), {
+      status: 401,
+      headers: corsHeaders,
+    });
+  }
+
+  const [{ data: ownedProject, error: ownerError }, { data: membership, error: memberError }] =
+    await Promise.all([
+      supabase
+        .from('projects')
+        .select('id')
+        .eq('id', projectId)
+        .eq('owner_user_id', userId)
+        .maybeSingle(),
+      supabase
+        .from('project_members')
+        .select('project_id')
+        .eq('project_id', projectId)
+        .eq('user_id', userId)
+        .maybeSingle(),
+    ]);
+
+  if (ownerError || memberError) {
+    console.error('❌ [Auth Error] Failed to validate project access', { ownerError, memberError });
+    return new Response(JSON.stringify({ error: 'Unable to validate project access' }), {
+      status: 500,
+      headers: corsHeaders,
+    });
+  }
+
+  if (!ownedProject && !membership) {
+    return new Response(JSON.stringify({ error: 'Forbidden: project access denied' }), {
+      status: 403,
+      headers: corsHeaders,
+    });
+  }
+
+  return null;
+}
+
 serve(async (req) => {
   const startTime = Date.now();
   console.log('📥 [Edge Function] Received request to product-documentation');
@@ -540,6 +595,25 @@ const resolvedInputName =
   artifact_name ??
   (hasCsvInput ? 'CSV Upload' : 'Manual Input');
 
+    if (!project_id || !isValidUUID(project_id)) {
+      console.warn('⚠️ [Validation Error] Invalid project_id - must be UUID');
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid project_id',
+          details: 'project_id must be a valid UUID string',
+        }),
+        {
+          status: 400,
+          headers: corsHeaders,
+        }
+      );
+    }
+
+    const accessError = await requireProjectAccess(req, project_id);
+    if (accessError) {
+      return accessError;
+    }
+
   // =====================================================
 // NEW: Fetch project context documents (read-only)
 // =====================================================
@@ -660,25 +734,6 @@ console.log('📎 [CSV Detect]', {
   hasCsvText,
   csvTextLength: hasCsvText ? jiraCsvText.length : 0,
 });
-
-
-    // CRITICAL: Validate project_id is a valid UUID
-    if (!project_id || !isValidUUID(project_id)) {
-      console.warn('⚠️ [Validation Error] Invalid project_id - must be UUID');
-      return new Response(
-        JSON.stringify({
-          error: 'Invalid project_id',
-          details: 'project_id must be a valid UUID string',
-        }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          },
-        }
-      );
-    }
 
     // Check OpenAI API key
     if (!OPENAI_API_KEY) {
