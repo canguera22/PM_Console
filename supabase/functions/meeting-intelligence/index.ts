@@ -211,22 +211,28 @@ function normalizeActionItems(raw: unknown) {
 function extractActionItemsFromMarkdown(markdown: string) {
   const text = String(markdown || '');
   const sectionMatch = text.match(
-    /(?:^|\n)#{1,3}\s*Action Items\s*\n([\s\S]*?)(?=\n#{1,3}\s|\nConflicts with Context Documents|$)/i,
+    /(?:^|\n)#{1,3}\s*(?:Proposed\s+)?Action Items\s*\n([\s\S]*?)(?=\n#{1,3}\s|\nConflicts with Context Documents|$)/i,
   );
 
   if (!sectionMatch?.[1]) return [];
 
   const lines = sectionMatch[1]
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
+    .filter((line) => line.trim());
 
   const candidates: Array<Record<string, unknown>> = [];
   let pending: Record<string, unknown> | null = null;
 
-  for (const line of lines) {
-    const cleaned = line.replace(/^[-*]\s*/, '').replace(/^\d+\.\s*/, '').trim();
-    if (!cleaned) continue;
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    const cleaned = trimmed.replace(/^[-*]\s+/, '').replace(/^\d+\.\s*/, '').trim();
+    if (!cleaned || shouldSkipActionLine(cleaned)) continue;
+
+    const isNestedBullet = /^\s{2,}[-*]\s+/.test(rawLine);
+    if (isNestedBullet && pending) {
+      pending.description = [pending.description, cleaned].filter(Boolean).join('\n');
+      continue;
+    }
 
     const isSubDetail = /^(owner|due|source|context|confidence):/i.test(cleaned);
     if (isSubDetail && pending) {
@@ -248,30 +254,26 @@ function extractActionItemsFromMarkdown(markdown: string) {
 }
 
 function actionItemFromLine(line: string, index: number) {
-  const normalized = line.replace(/\s+/g, ' ').trim();
+  const normalized = stripInlineMarkdown(line).replace(/\s+/g, ' ').trim();
   if (!normalized) return null;
 
   const dueDate = parseLooseDueDate(normalized);
   let owner: string | null = null;
   let title = normalized;
 
-  const ownerDashMatch = normalized.match(/^([^–—-]{2,60})\s+[–—-]\s+(.+)$/);
-  if (ownerDashMatch) {
+  const ownerDashMatch = normalized.match(/^([^:–—-]{2,60})\s+[–—-]\s+(.+)$/);
+  if (ownerDashMatch && looksLikeOwner(ownerDashMatch[1])) {
     owner = cleanOwner(ownerDashMatch[1]);
     title = ownerDashMatch[2].trim();
-  } else {
-    const ownerToMatch = normalized.match(/^([^:]{2,60}?)\s+to\s+(.+)$/i);
-    if (ownerToMatch) {
-      owner = cleanOwner(ownerToMatch[1]);
-      title = ownerToMatch[2].trim();
-    }
   }
 
   title = title
-    .replace(/\bby\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s+[A-Z][a-z]+\s+\d{1,2}\b\.?$/i, '')
-    .replace(/\bdue\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s+[A-Z][a-z]+\s+\d{1,2}\b\.?$/i, '')
+    .replace(/\bby\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s+[A-Z][a-z]+\s+\d{1,2}(?:st|nd|rd|th)?\b\.?$/i, '')
+    .replace(/\bdue\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s+[A-Z][a-z]+\s+\d{1,2}(?:st|nd|rd|th)?\b\.?$/i, '')
+    .replace(/\bon\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s+[A-Z][a-z]+\s+\d{1,2}(?:st|nd|rd|th)?\b\.?$/i, '')
     .replace(/\bdue\s+\d{4}-\d{2}-\d{2}\b\.?$/i, '')
     .replace(/\bby\s+\d{4}-\d{2}-\d{2}\b\.?$/i, '')
+    .replace(/:$/, '')
     .replace(/\.$/, '')
     .trim();
 
@@ -290,6 +292,33 @@ function actionItemFromLine(line: string, index: number) {
   };
 }
 
+function shouldSkipActionLine(line: string) {
+  const plain = line.replace(/[*_]/g, '').trim();
+  return (
+    /^-{3,}$/.test(plain) ||
+    /^\(?no owners?\b/i.test(plain) ||
+    /^none identified/i.test(plain) ||
+    /^n\/a$/i.test(plain)
+  );
+}
+
+function stripInlineMarkdown(value: string) {
+  return value
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/_(.*?)_/g, '$1')
+    .trim();
+}
+
+function looksLikeOwner(value: string) {
+  const normalized = value.trim();
+  return (
+    /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}$/.test(normalized) ||
+    /\b(team|owner|ops|operations|product|engineering|design|qa)\b/i.test(normalized)
+  );
+}
+
 function cleanOwner(value: string) {
   const owner = value
     .replace(/^owner:\s*/i, '')
@@ -305,7 +334,7 @@ function parseLooseDueDate(value: string) {
   if (explicit) return explicit[1];
 
   const monthMatch = value.match(
-    /\b(?:by|due)?\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s*(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})\b/i,
+    /\b(?:by|due|on)?\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s*(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/i,
   );
 
   if (!monthMatch) return null;
@@ -334,7 +363,13 @@ function parseLooseDueDate(value: string) {
 
 function inferRelatedModule(title: string) {
   const lower = title.toLowerCase();
-  if (lower.includes('release note') || lower.includes('faq') || lower.includes('customer comm')) {
+  if (
+    lower.includes('release note') ||
+    lower.includes('release communication') ||
+    lower.includes('communication') ||
+    lower.includes('faq') ||
+    lower.includes('customer comm')
+  ) {
     return 'release_communications';
   }
   if (lower.includes('prd') || lower.includes('requirement') || lower.includes('spec')) {

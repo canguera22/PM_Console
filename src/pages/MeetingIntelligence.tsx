@@ -21,6 +21,7 @@ import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { useSearchParams } from 'react-router-dom';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { createProjectTask } from '@/lib/projectTasks';
+import { extractActionItemsFromMarkdown } from '@/lib/actionItems';
 import { PROJECT_TASK_MODULE_LABELS, ProjectTaskModule } from '@/types/project-tasks';
 
 
@@ -246,9 +247,13 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       );
 
       console.log('✨ [Success] Received AI-generated output', { outputLength: result.output.length });
+      const proposedActionItems =
+        result.action_items && result.action_items.length > 0
+          ? result.action_items
+          : extractActionItemsFromMarkdown(result.output);
       setCurrentOutput(result.output);
       setCurrentArtifactId(result.artifact_id ?? null);
-      setActionItems(result.action_items ?? []);
+      setActionItems(proposedActionItems);
       setSavedActionItemKeys(new Set());
 
       console.log('💾 [Database] Saving to project_artifacts table...');
@@ -257,10 +262,10 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       await loadSessions();
 
       toast({
-        title: 'Success',
-        description:
-          (result.action_items?.length ?? 0) > 0
-            ? `Notes analyzed with ${result.action_items?.length} action item${result.action_items?.length === 1 ? '' : 's'} ready for review`
+          title: 'Success',
+          description:
+          proposedActionItems.length > 0
+            ? `Notes analyzed with ${proposedActionItems.length} action item${proposedActionItems.length === 1 ? '' : 's'} ready for review`
             : 'Notes analyzed successfully',
       });
     } catch (err: unknown) {

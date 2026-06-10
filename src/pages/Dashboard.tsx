@@ -289,37 +289,50 @@ export default function Dashboard() {
                       onClick={() => navigate(module.path)}
                       className={`group w-full rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${accent.border} ${accent.glow}`}
                     >
-                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ring-1 ${accent.icon}`}>
-                          <Icon className="h-6 w-6" />
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="mb-1 flex flex-wrap items-center gap-2">
-                            <span className={`text-xs font-semibold uppercase tracking-wide ${accent.text}`}>
-                              {module.eyebrow}
-                            </span>
-                            {module.hasPMAdvisor && (
-                              <Badge
-                                variant="outline"
-                                className="border-violet-200 bg-violet-50 text-violet-700"
-                              >
-                                <Brain className="mr-1 h-3 w-3" />
-                                PM Advisor
-                              </Badge>
-                            )}
+                      <div className="flex min-h-[132px] flex-col gap-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ring-1 ${accent.icon}`}>
+                              <Icon className="h-6 w-6" />
+                            </div>
+                            <div className="min-w-0">
+                              <span className={`block text-xs font-semibold uppercase tracking-wide ${accent.text}`}>
+                                {module.eyebrow}
+                              </span>
+                              <h3 className="m-0 mt-1 line-clamp-1 text-base font-semibold text-slate-950">
+                                {module.title}
+                              </h3>
+                            </div>
                           </div>
-                          <h3 className="text-base font-semibold text-slate-950">
-                            {module.title}
-                          </h3>
-                          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
-                            {module.description}
-                          </p>
-                        </div>
 
-                        <div className={`flex shrink-0 items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${accent.panel} ${accent.text}`}>
+                          <div className={`flex w-[150px] shrink-0 items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${accent.panel} ${accent.text}`}>
                           <span>{module.cta}</span>
                           <ArrowUpRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                          </div>
+                        </div>
+
+                        <div className="grid flex-1 gap-3 pl-0 sm:grid-cols-[48px_minmax(0,1fr)]">
+                          <div className="hidden sm:block" />
+                          <div className="min-w-0">
+                            <p className="m-0 min-h-[48px] max-w-2xl text-sm leading-6 text-slate-600">
+                              {module.description}
+                            </p>
+                            <div className="mt-3 h-6">
+                              {module.hasPMAdvisor ? (
+                                <Badge
+                                  variant="outline"
+                                  className="border-violet-200 bg-violet-50 text-violet-700"
+                                >
+                                  <Brain className="mr-1 h-3 w-3" />
+                                  PM Advisor
+                                </Badge>
+                              ) : (
+                                <span className="inline-flex h-6 items-center rounded-full border border-slate-200 bg-slate-50 px-2 text-xs font-medium text-slate-500">
+                                  Core module
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </button>
