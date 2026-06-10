@@ -1,11 +1,11 @@
 import { Outlet } from "react-router-dom";
-import GlobalHeader from "@/components/GlobalHeader";
+import { AppSidebar } from "@/components/AppSidebar";
 
 const AppLayout = () => {
   return (
-    <div className="min-h-screen flex flex-col">
-      <GlobalHeader />
-      <main className="flex-1">
+    <div className="min-h-screen bg-slate-50 lg:flex lg:items-start">
+      <AppSidebar />
+      <main className="min-w-0 flex-1">
         <Outlet />
       </main>
     </div>

@@ -98,10 +98,10 @@ async function requireProjectAccess(req: Request, projectId: string): Promise<Re
 
 
 
-const SYSTEM_PROMPT = `You are a Meeting Intelligence Analyst specializing in extracting actionable insights from meeting transcripts and cleaning up rough meeting notes. You are also responsible for validating decisions against known constraints.
+const SYSTEM_PROMPT = `You are a Project Notes Intelligence Analyst specializing in turning rough PM notes into organized project memory and reviewable follow-up tasks. You are also responsible for validating note-derived claims against known project context.
 
 Your role:
-- Convert rough notes into polished, structured meeting notes without inventing facts
+- Convert rough notes into polished, structured project notes without inventing facts
 - Extract key decisions, action items, and next steps
 - Identify participants and their contributions when the source content makes them clear
 - Create executive summaries
@@ -110,7 +110,7 @@ Your role:
 - Explicitly distinguish between proposed decisions and validated decisions
 
 
-When the input mode is "transcript", produce a full meeting analysis that can include:
+When the input mode is "transcript", produce a full notes analysis that can include:
 - Executive Summary: High-level overview for stakeholders
 - Action Items: Clear tasks with owners and deadlines
 - Decisions Log: Key decisions made
@@ -146,6 +146,205 @@ REQUIRED OUTPUT SECTION
 
 
 Format output in markdown with clear sections and bullet points.`;
+
+function extractJsonObject(raw: string) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) {
+      try {
+        return JSON.parse(fenced[1].trim());
+      } catch {
+        // Continue to brace extraction.
+      }
+    }
+
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeActionItems(raw: unknown) {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((item, index) => {
+      const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const title = typeof row.title === 'string' ? row.title.trim() : '';
+      if (!title) return null;
+
+      const dueDate = typeof row.due_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.due_date)
+        ? row.due_date
+        : null;
+      const confidence = row.confidence === 'high' || row.confidence === 'medium' || row.confidence === 'low'
+        ? row.confidence
+        : null;
+
+      return {
+        id: typeof row.id === 'string' && row.id.trim() ? row.id.trim() : `action-${index + 1}`,
+        title,
+        description: typeof row.description === 'string' && row.description.trim() ? row.description.trim() : null,
+        due_date: dueDate,
+        owner: typeof row.owner === 'string' && row.owner.trim() ? row.owner.trim() : null,
+        source_evidence: typeof row.source_evidence === 'string' && row.source_evidence.trim() ? row.source_evidence.trim() : null,
+        confidence,
+        context_validation: typeof row.context_validation === 'string' && row.context_validation.trim() ? row.context_validation.trim() : null,
+        related_module: typeof row.related_module === 'string' && row.related_module.trim() ? row.related_module.trim() : null,
+      };
+    })
+    .filter(Boolean);
+}
+
+function extractActionItemsFromMarkdown(markdown: string) {
+  const text = String(markdown || '');
+  const sectionMatch = text.match(
+    /(?:^|\n)#{1,3}\s*Action Items\s*\n([\s\S]*?)(?=\n#{1,3}\s|\nConflicts with Context Documents|$)/i,
+  );
+
+  if (!sectionMatch?.[1]) return [];
+
+  const lines = sectionMatch[1]
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const candidates: Array<Record<string, unknown>> = [];
+  let pending: Record<string, unknown> | null = null;
+
+  for (const line of lines) {
+    const cleaned = line.replace(/^[-*]\s*/, '').replace(/^\d+\.\s*/, '').trim();
+    if (!cleaned) continue;
+
+    const isSubDetail = /^(owner|due|source|context|confidence):/i.test(cleaned);
+    if (isSubDetail && pending) {
+      const [label, ...rest] = cleaned.split(':');
+      const value = rest.join(':').trim();
+      if (/^owner$/i.test(label)) pending.owner = value;
+      if (/^due$/i.test(label)) pending.due_date = parseLooseDueDate(value);
+      continue;
+    }
+
+    const item = actionItemFromLine(cleaned, candidates.length);
+    if (item) {
+      candidates.push(item);
+      pending = item;
+    }
+  }
+
+  return normalizeActionItems(candidates);
+}
+
+function actionItemFromLine(line: string, index: number) {
+  const normalized = line.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+
+  const dueDate = parseLooseDueDate(normalized);
+  let owner: string | null = null;
+  let title = normalized;
+
+  const ownerDashMatch = normalized.match(/^([^–—-]{2,60})\s+[–—-]\s+(.+)$/);
+  if (ownerDashMatch) {
+    owner = cleanOwner(ownerDashMatch[1]);
+    title = ownerDashMatch[2].trim();
+  } else {
+    const ownerToMatch = normalized.match(/^([^:]{2,60}?)\s+to\s+(.+)$/i);
+    if (ownerToMatch) {
+      owner = cleanOwner(ownerToMatch[1]);
+      title = ownerToMatch[2].trim();
+    }
+  }
+
+  title = title
+    .replace(/\bby\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s+[A-Z][a-z]+\s+\d{1,2}\b\.?$/i, '')
+    .replace(/\bdue\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s+[A-Z][a-z]+\s+\d{1,2}\b\.?$/i, '')
+    .replace(/\bdue\s+\d{4}-\d{2}-\d{2}\b\.?$/i, '')
+    .replace(/\bby\s+\d{4}-\d{2}-\d{2}\b\.?$/i, '')
+    .replace(/\.$/, '')
+    .trim();
+
+  if (!title || /^confirm:?$/i.test(title)) return null;
+
+  return {
+    id: `action-${index + 1}`,
+    title,
+    description: normalized,
+    due_date: dueDate,
+    owner,
+    source_evidence: normalized,
+    confidence: 'medium',
+    context_validation: 'Extracted from the generated Action Items section.',
+    related_module: inferRelatedModule(title),
+  };
+}
+
+function cleanOwner(value: string) {
+  const owner = value
+    .replace(/^owner:\s*/i, '')
+    .replace(/^owner\s+/i, '')
+    .replace(/[“”"]/g, '')
+    .trim();
+
+  return owner || null;
+}
+
+function parseLooseDueDate(value: string) {
+  const explicit = value.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (explicit) return explicit[1];
+
+  const monthMatch = value.match(
+    /\b(?:by|due)?\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?(?:day)?[,]?\s*(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})\b/i,
+  );
+
+  if (!monthMatch) return null;
+
+  const monthLookup: Record<string, string> = {
+    jan: '01',
+    feb: '02',
+    mar: '03',
+    apr: '04',
+    may: '05',
+    jun: '06',
+    jul: '07',
+    aug: '08',
+    sep: '09',
+    oct: '10',
+    nov: '11',
+    dec: '12',
+  };
+
+  const month = monthLookup[monthMatch[1].slice(0, 3).toLowerCase()];
+  const day = monthMatch[2].padStart(2, '0');
+  if (!month) return null;
+
+  return `2026-${month}-${day}`;
+}
+
+function inferRelatedModule(title: string) {
+  const lower = title.toLowerCase();
+  if (lower.includes('release note') || lower.includes('faq') || lower.includes('customer comm')) {
+    return 'release_communications';
+  }
+  if (lower.includes('prd') || lower.includes('requirement') || lower.includes('spec')) {
+    return 'product_documentation';
+  }
+  if (lower.includes('priorit') || lower.includes('backlog') || lower.includes('wsjf')) {
+    return 'prioritization';
+  }
+  return 'meeting_intelligence';
+}
 
 serve(async (req) => {
   const startTime = Date.now();
@@ -293,16 +492,16 @@ serve(async (req) => {
       normalizedInputMode === 'notes_cleanup'
         ? [
             'Input mode: notes_cleanup',
-            'Clean up the raw notes into polished, easy-to-scan meeting notes.',
+            'Clean up the raw notes into polished, easy-to-scan project notes.',
             'Preserve the original meaning and uncertainty.',
             'Use markdown headings and bullets.',
             'If action items are identifiable, include owners only when explicitly present.',
             'If decisions are uncertain, list them under open questions instead of asserting them as final.',
-            'Recommended sections: ## Executive Summary, ## Cleaned Notes, ## Action Items, ## Decisions and Open Questions.',
+            'Recommended markdown sections: ## Executive Summary, ## Cleaned Notes, ## Proposed Action Items, ## Decisions and Open Questions.',
           ].join('\n')
         : [
             'Input mode: transcript',
-            'Analyze the transcript and extract structured meeting intelligence.',
+            'Analyze the transcript and extract structured project notes intelligence.',
             'Recommended sections: ## Executive Summary, ## Action Items, ## Decisions Log, ## Follow-up Items, ## Meeting Notes.',
           ].join('\n');
 
@@ -322,6 +521,30 @@ serve(async (req) => {
       userMessage += `\nParticipants: ${participants}`;
     }
     userMessage += `\n\nREQUIRED FINAL SECTION:\n- End the output with exactly this heading: "## Conflicts with Context Documents"\n- In that section, compare your output against uploaded project documents and prior project artifacts provided above.\n- If none conflict, write: "No conflicts identified".`;
+
+    userMessage += `\n\nReturn ONLY valid JSON matching this shape:
+{
+  "output": "markdown string for the user",
+  "action_items": [
+    {
+      "id": "stable short id",
+      "title": "imperative task title",
+      "description": "optional detail from notes",
+      "due_date": "YYYY-MM-DD or null",
+      "owner": "person or team if explicitly present, else null",
+      "source_evidence": "short quote or paraphrase from the notes",
+      "confidence": "high|medium|low",
+      "context_validation": "how this item aligns/conflicts with provided docs and artifacts",
+      "related_module": "meeting_intelligence|product_documentation|release_communications|prioritization|null"
+    }
+  ]
+}
+
+Rules for action_items:
+- Extract only actionable commitments, follow-ups, decisions requiring work, or due-date-bound reminders.
+- Do not invent due dates. If notes say "Friday", infer the calendar date only when enough date context is available; otherwise use null and explain in description.
+- Use related_module only when the action clearly maps to an existing PM Console module.
+- If no action items exist, return an empty array.`;
 
     console.log('🤖 [OpenAI] Calling GPT-5.2 Chat...');
     console.log('📊 [OpenAI] Message length:', userMessage.length);
@@ -354,12 +577,22 @@ serve(async (req) => {
     }
 
     const data = await response.json();
-    const output = data.choices[0].message.content;
+    const rawOutput = data.choices[0].message.content;
+    const parsedOutput = extractJsonObject(rawOutput);
+    const output =
+      parsedOutput && typeof parsedOutput.output === 'string'
+        ? parsedOutput.output
+        : rawOutput;
+    const normalizedJsonActionItems = normalizeActionItems(parsedOutput?.action_items);
+    const actionItems = normalizedJsonActionItems.length > 0
+      ? normalizedJsonActionItems
+      : extractActionItemsFromMarkdown(output);
     const duration = Date.now() - startTime;
 
     console.log('✅ [Success] Generated output', {
       duration: `${duration}ms`,
       output_length: output.length,
+      action_items: actionItems.length,
       tokens_used: data.usage?.total_tokens || 'N/A',
     });
 
@@ -400,6 +633,7 @@ serve(async (req) => {
           input_mode: normalizedInputMode,
           meeting_type,
           participants,
+          action_items: actionItems,
           tokens_used: data.usage?.total_tokens,
           duration_ms: duration,
         },
@@ -418,6 +652,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         output,
+        action_items: actionItems,
         artifact_id: artifact?.id,
       }),
       {

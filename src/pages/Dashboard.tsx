@@ -17,6 +17,12 @@ import {
   ArrowRight,
   Brain,
   MessageSquareText,
+  Activity,
+  ArrowUpRight,
+  Clock3,
+  FolderKanban,
+  Plus,
+  Sparkles,
 } from 'lucide-react';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { supabaseFetch } from '@/lib/supabase';
@@ -25,6 +31,7 @@ import { fetchProjects } from '@/lib/projects';
 import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { Project } from '@/types/project';
 import { ProjectTaskPanel } from '@/components/ProjectTaskPanel';
+import { PageShell } from '@/components/PageShell';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -39,12 +46,15 @@ export default function Dashboard() {
   const modules = [
     {
       id: 'meetings',
-      title: 'Meeting Intelligence',
+      title: 'Project Notes',
       description:
-        'Process meeting transcripts into structured outputs with AI-powered analysis',
+        'Capture raw notes, validate context, and turn follow-ups into project tasks',
       icon: MessageSquareText,
       path: '/meetings',
       hasPMAdvisor: false,
+      eyebrow: 'Notes to action',
+      accent: 'blue',
+      cta: 'Clean up notes',
     },
     {
       id: 'documentation',
@@ -54,6 +64,9 @@ export default function Dashboard() {
       icon: FileText,
       path: '/documentation',
       hasPMAdvisor: true,
+      eyebrow: 'Specs and stories',
+      accent: 'violet',
+      cta: 'Draft docs',
     },
     {
       id: 'releases',
@@ -63,6 +76,9 @@ export default function Dashboard() {
       icon: Megaphone,
       path: '/releases',
       hasPMAdvisor: true,
+      eyebrow: 'Launch messaging',
+      accent: 'emerald',
+      cta: 'Write release comms',
     },
     {
       id: 'prioritization',
@@ -72,8 +88,48 @@ export default function Dashboard() {
       icon: ListOrdered,
       path: '/prioritization',
       hasPMAdvisor: false,
+      eyebrow: 'Roadmap choices',
+      accent: 'amber',
+      cta: 'Rank backlog',
     },
   ];
+
+  const moduleAccentClasses: Record<string, {
+    icon: string;
+    panel: string;
+    text: string;
+    border: string;
+    glow: string;
+  }> = {
+    blue: {
+      icon: 'bg-blue-50 text-blue-600 ring-blue-100',
+      panel: 'bg-blue-50/70',
+      text: 'text-blue-700',
+      border: 'hover:border-blue-200',
+      glow: 'group-hover:shadow-blue-100/80',
+    },
+    violet: {
+      icon: 'bg-violet-50 text-violet-600 ring-violet-100',
+      panel: 'bg-violet-50/70',
+      text: 'text-violet-700',
+      border: 'hover:border-violet-200',
+      glow: 'group-hover:shadow-violet-100/80',
+    },
+    emerald: {
+      icon: 'bg-emerald-50 text-emerald-600 ring-emerald-100',
+      panel: 'bg-emerald-50/70',
+      text: 'text-emerald-700',
+      border: 'hover:border-emerald-200',
+      glow: 'group-hover:shadow-emerald-100/80',
+    },
+    amber: {
+      icon: 'bg-amber-50 text-amber-700 ring-amber-100',
+      panel: 'bg-amber-50/70',
+      text: 'text-amber-700',
+      border: 'hover:border-amber-200',
+      glow: 'group-hover:shadow-amber-100/80',
+    },
+  };
 
   // -----------------------------
   // Shared display name helper
@@ -161,32 +217,35 @@ export default function Dashboard() {
     return `${days}d ago`;
   };
 
-  return (
-    <div className="min-h-screen bg-[#F9FAFB]">
-      {/* Workspace Header */}
-      <div className="border-b border-[#E5E7EB] bg-white">
-        <div className="container mx-auto px-4 py-6 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-[28px] font-bold text-[#111827]">
-                Project Workspace
-              </h1>
-              <p className="text-sm text-[#6B7280]">
-                Create new documents using all available modules or reference recent work.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
+  const formatArtifactType = (artifactType: string) =>
+    artifactType
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
 
-      <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8 space-y-10">
+  return (
+    <PageShell
+      eyebrow="Product Workbench"
+      title="What do you want to move forward?"
+      icon={Sparkles}
+      description="Start with a creation module, review open work, or jump into the project's saved outputs."
+      action={
+        <Button
+          variant="outline"
+          onClick={() => navigate('/dashboard')}
+          className="w-full justify-center gap-2 border-slate-200 bg-white sm:w-auto"
+        >
+          <FolderKanban className="h-4 w-4" />
+          View Artifacts
+        </Button>
+      }
+    >
         {showOnboarding && (
-          <Card className="border-[#BFDBFE] bg-[#EFF6FF]">
+          <Card className="mb-6 border-blue-200 bg-blue-50">
             <CardHeader>
-              <CardTitle className="text-xl text-[#1E3A8A]">
+              <CardTitle className="text-xl text-blue-950">
                 Welcome to Product Workbench
               </CardTitle>
-              <CardDescription className="text-[#1E40AF]">
+              <CardDescription className="text-blue-800">
                 To get started, create a project. All generated artifacts are project-based, and context builds over
                 time. You can also add project context documents, and those documents plus generated artifacts are used
                 to improve future outputs.
@@ -200,144 +259,196 @@ export default function Dashboard() {
           </Card>
         )}
 
-        <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
-          <ProjectTaskPanel activeProject={activeProject} compact />
-
-          {/* ================= RECENT ACTIVITY ================= */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-4">
+        <div className="grid gap-6 xl:grid-cols-[minmax(320px,0.78fr)_minmax(520px,1.22fr)] xl:items-start">
+          {/* ================= MODULE LAUNCHER ================= */}
+          <section className="space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <CardTitle className="text-lg">
-                    Recent Activity
-                  </CardTitle>
-                  <CardDescription>
-                    Latest outputs across modules in this project
-                  </CardDescription>
+                  <h2 className="text-lg font-semibold text-slate-950">
+                    Choose a Module
+                  </h2>
+                  <p className="text-sm text-slate-600">
+                    Pick the artifact you want to create or improve next.
+                  </p>
                 </div>
+                <Badge variant="outline" className="w-fit border-slate-200 bg-slate-50 text-slate-600">
+                  {activeProject?.name ?? 'No project selected'}
+                </Badge>
+              </div>
+
+              <div className="mt-5 grid gap-3">
+                {modules.map((module) => {
+                  const Icon = module.icon;
+                  const accent = moduleAccentClasses[module.accent];
+
+                  return (
+                    <button
+                      key={module.id}
+                      type="button"
+                      onClick={() => navigate(module.path)}
+                      className={`group w-full rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${accent.border} ${accent.glow}`}
+                    >
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ring-1 ${accent.icon}`}>
+                          <Icon className="h-6 w-6" />
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="mb-1 flex flex-wrap items-center gap-2">
+                            <span className={`text-xs font-semibold uppercase tracking-wide ${accent.text}`}>
+                              {module.eyebrow}
+                            </span>
+                            {module.hasPMAdvisor && (
+                              <Badge
+                                variant="outline"
+                                className="border-violet-200 bg-violet-50 text-violet-700"
+                              >
+                                <Brain className="mr-1 h-3 w-3" />
+                                PM Advisor
+                              </Badge>
+                            )}
+                          </div>
+                          <h3 className="text-base font-semibold text-slate-950">
+                            {module.title}
+                          </h3>
+                          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
+                            {module.description}
+                          </p>
+                        </div>
+
+                        <div className={`flex shrink-0 items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${accent.panel} ${accent.text}`}>
+                          <span>{module.cta}</span>
+                          <ArrowUpRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+
+          <aside className="space-y-6 xl:sticky xl:top-6">
+            <ProjectTaskPanel
+              activeProject={activeProject}
+              compact
+              readOnly
+              headerAction={
+                <Button
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => navigate('/tasks')}
+                  aria-label="Open tasks page to create a task"
+                  title="Create task"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              }
+            />
+
+            {/* ================= RECENT ACTIVITY ================= */}
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-lg text-slate-950">
+                      <Activity className="h-5 w-5 text-blue-600" />
+                      Recent Activity
+                    </CardTitle>
+                    <CardDescription>
+                      Latest outputs across modules in this project
+                    </CardDescription>
+                  </div>
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => navigate('/dashboard')}
+                    className="hidden shrink-0 gap-1 text-slate-600 hover:text-slate-950 sm:flex"
+                  >
+                    View Artifacts
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+
+              <CardContent className="space-y-3">
+                {isLoadingActivity && (
+                  <div className="space-y-3">
+                    {[0, 1, 2].map((item) => (
+                      <div key={item} className="h-16 animate-pulse rounded-lg bg-slate-100" />
+                    ))}
+                  </div>
+                )}
+
+                {!isLoadingActivity && recentArtifacts.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-600">
+                    No recent activity yet. Start with a module and generated artifacts will appear here.
+                  </div>
+                )}
+
+                {recentArtifacts.map((artifact) => {
+                  const route = getArtifactRoute(
+                    artifact.artifact_type,
+                    artifact.id
+                  );
+
+                  return (
+                    <button
+                      key={artifact.id}
+                      type="button"
+                      onClick={() => {
+                        if (route) navigate(route);
+                      }}
+                      className="group w-full rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <p className="line-clamp-2 text-sm font-semibold text-slate-950">
+                            {getArtifactDisplayName(artifact)}
+                          </p>
+
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                            <span>{formatArtifactType(artifact.artifact_type)}</span>
+                            <span className="text-slate-300">/</span>
+                            <span className="inline-flex items-center gap-1">
+                              <Clock3 className="h-3.5 w-3.5" />
+                              {formatRelativeTime(artifact.created_at)}
+                            </span>
+                          </div>
+                          <p className="truncate text-xs text-slate-500">
+                            Created by {artifact.created_by_email ?? 'Unknown'}
+                          </p>
+                        </div>
+
+                        {artifact.advisor_feedback ? (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-violet-200 bg-violet-50 text-violet-700"
+                          >
+                            Reviewed
+                          </Badge>
+                        ) : (
+                          <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-1 group-hover:text-blue-600" />
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
 
                 <Button
                   variant="outline"
                   onClick={() => navigate('/dashboard')}
-                  className="flex items-center gap-2"
+                  className="flex w-full items-center justify-center gap-2 sm:hidden"
                 >
-                  View Project Dashboard
-                  <ArrowRight className="w-4 h-4" />
+                  View Artifacts
+                  <ArrowRight className="h-4 w-4" />
                 </Button>
-              </div>
-            </CardHeader>
-
-            <CardContent className="space-y-3">
-              {isLoadingActivity && (
-                <p className="text-sm text-muted-foreground">
-                  Loading recent activity…
-                </p>
-              )}
-
-              {!isLoadingActivity && recentArtifacts.length === 0 && (
-                <div className="text-sm text-muted-foreground border rounded-md p-4">
-                  No recent activity yet. Artifacts you generate will appear here.
-                </div>
-              )}
-
-              {recentArtifacts.map((artifact) => {
-                const route = getArtifactRoute(
-                  artifact.artifact_type,
-                  artifact.id
-                );
-
-                return (
-                  <div
-                    key={artifact.id}
-                    onClick={() => {
-                      if (route) navigate(route);
-                    }}
-                    className="flex items-center justify-between rounded-md border p-3 cursor-pointer hover:bg-muted/50 transition"
-                  >
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">
-                        {getArtifactDisplayName(artifact)}
-                      </p>
-
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span className="capitalize">
-                          {artifact.artifact_type.replace('_', ' ')}
-                        </span>
-                        <span>•</span>
-                        <span>{formatRelativeTime(artifact.created_at)}</span>
-                        <span>•</span>
-                        <span>Created by: {artifact.created_by_email ?? 'Unknown'}</span>
-                      </div>
-                    </div>
-
-                    {artifact.advisor_feedback && (
-                      <Badge
-                        variant="outline"
-                        className="bg-[#DDD6FE] text-[#5B21B6] border-[#DDD6FE]"
-                      >
-                        Advisor Reviewed
-                      </Badge>
-                    )}
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </aside>
         </div>
-
-        {/* ================= MODULES ================= */}
-        <div>
-          <h2 className="text-[22px] font-semibold text-[#1F2937] mb-2">
-            Modules
-          </h2>
-          <p className="text-sm text-[#6B7280] mb-6">
-            Choose what you want to work on next
-          </p>
-
-          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-            {modules.map((module) => {
-              const Icon = module.icon;
-              return (
-                <Card
-                  key={module.id}
-                  className="group cursor-pointer transition-all hover:border-[#3B82F6] hover:shadow-md hover:-translate-y-0.5"
-                  onClick={() => navigate(module.path)}
-                >
-                  <CardHeader className="p-6">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-[#DBEAFE]">
-                        <Icon className="h-7 w-7 text-[#3B82F6]" />
-                      </div>
-                      {module.hasPMAdvisor && (
-                        <Badge
-                          variant="outline"
-                          className="text-xs bg-[#DDD6FE] text-[#5B21B6] border-[#DDD6FE]"
-                        >
-                          PM Advisor
-                        </Badge>
-                      )}
-                    </div>
-
-                    <CardTitle className="mt-5 text-base font-semibold leading-snug min-h-[48px]">
-                      {module.title}
-                    </CardTitle>
-                    <CardDescription className="mt-2 text-sm min-h-[60px]">
-                      {module.description}
-                    </CardDescription>
-                  </CardHeader>
-
-                  <CardContent className="px-6 pb-6">
-                    <div className="flex items-center text-sm font-semibold text-[#3B82F6] group-hover:underline">
-                      Open module
-                      <ArrowRight className="ml-1 h-4 w-4 transition-transform group-hover:translate-x-1" />
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </div>
-      </div>
 
       <CreateProjectModal
         open={isCreateProjectModalOpen}
@@ -348,6 +459,6 @@ export default function Dashboard() {
           setIsCreateProjectModalOpen(false);
         }}
       />
-    </div>
+    </PageShell>
   );
 }

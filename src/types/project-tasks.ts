@@ -9,7 +9,7 @@ export type ProjectTaskModule = typeof PROJECT_TASK_MODULES[number];
 export type ProjectTaskStatus = 'open' | 'completed' | 'archived';
 
 export const PROJECT_TASK_MODULE_LABELS: Record<ProjectTaskModule, string> = {
-  meeting_intelligence: 'Meeting Intelligence',
+  meeting_intelligence: 'Project Notes',
   product_documentation: 'Product Documentation',
   release_communications: 'Release Communications',
   prioritization: 'Backlog Prioritization',

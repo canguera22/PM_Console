@@ -1,5 +1,17 @@
 export type MeetingInputMode = 'transcript' | 'notes_cleanup';
 
+export interface ExtractedActionItem {
+  id?: string;
+  title: string;
+  description?: string | null;
+  due_date?: string | null;
+  owner?: string | null;
+  source_evidence?: string | null;
+  confidence?: 'high' | 'medium' | 'low' | null;
+  context_validation?: string | null;
+  related_module?: string | null;
+}
+
 export interface MeetingSession {
   id: string;
   created_at: string;
@@ -11,7 +23,8 @@ export interface MeetingSession {
   participants: string | null;
   transcript: string;
   output: string | null;
-  metadata: Record<string, any>;
+  action_items?: ExtractedActionItem[];
+  metadata: Record<string, unknown>;
   version: number;
 }
 
@@ -24,9 +37,9 @@ export interface ProjectArtifactRow {
   artifact_name: string | null;
   created_by_user_id?: string | null;
   created_by_email?: string | null;
-  input_data: Record<string, any> | null;
+  input_data: Record<string, unknown> | null;
   output_data: string | null;
-  metadata: Record<string, any> | null;
+  metadata: Record<string, unknown> | null;
   advisor_feedback: string | null;
   advisor_reviewed_at: string | null;
   status: 'active' | 'archived' | 'deleted';

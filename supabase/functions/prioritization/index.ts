@@ -78,19 +78,41 @@ function compressContextText(text: string, max = 2200): string {
   return `${head}\n\n[... truncated ...]\n\n${tail}`;
 }
 
+type PrioritizationModel = 'WSJF' | 'RICE' | 'MoSCoW' | 'Value/Effort' | 'Custom';
+
+const SUPPORTED_MODELS: PrioritizationModel[] = [
+  'WSJF',
+  'RICE',
+  'MoSCoW',
+  'Value/Effort',
+  'Custom',
+];
+
+const MODEL_LABELS: Record<PrioritizationModel, string> = {
+  WSJF: 'WSJF',
+  RICE: 'RICE',
+  MoSCoW: 'MoSCoW',
+  'Value/Effort': 'Value/Effort',
+  Custom: 'Custom',
+};
+
+function isSupportedModel(model: string): model is PrioritizationModel {
+  return SUPPORTED_MODELS.includes(model as PrioritizationModel);
+}
+
 /* ------------------------------------------------------------------ */
 /* SYSTEM PROMPT */
 /* ------------------------------------------------------------------ */
 
 const SYSTEM_PROMPT = `
-You are a senior Product Manager reviewing and synthesizing WSJF-based backlog prioritization.
+You are a senior Product Manager reviewing and synthesizing backlog prioritization analyses.
 
 Your job is NOT to restate calculations or raw data.
 Your job IS to help a PM make better sequencing and planning decisions.
 
 STRICT RULES:
 - Never reproduce the raw CSV or full tables
-- Never explain WSJF mechanics
+- Never explain prioritization mechanics
 - Assume the reader understands prioritization frameworks
 - Focus on implications, not arithmetic
 
@@ -118,7 +140,7 @@ FINAL SECTION REQUIREMENT:
 - Cross-check your recommendations and claims against uploaded project context documents and previously generated project artifacts (if provided).
 - If no conflicts are found, explicitly write: "No conflicts identified"
 
-You may reference WSJF scores selectively if they add decision value.
+You may reference computed scores/categories selectively if they add decision value.
 Never mirror the full dataset.
 `;
 
@@ -149,9 +171,14 @@ serve(async (req) => {
 
     const {
       csv_content,
+      model = 'WSJF',
       effort_field_name = 'Job Size',
       max_score_per_factor = 10,
       normalize_scores = true,
+      rice_config,
+      moscow_config,
+      value_effort_config,
+      custom_config,
       initiative_name,
       default_effort_scale,
       notes_context,
@@ -171,6 +198,13 @@ serve(async (req) => {
       );
     }
 
+    if (!isSupportedModel(model)) {
+      return jsonResponse(
+        { error: `Unsupported model. Supported models: ${SUPPORTED_MODELS.join(', ')}` },
+        400
+      );
+    }
+
     if (!project_id || !isValidUUID(project_id)) {
       return jsonResponse(
         { error: 'project_id must be a valid UUID' },
@@ -181,6 +215,57 @@ serve(async (req) => {
     const accessError = await requireProjectAccess(req, project_id);
     if (accessError) {
       return accessError;
+    }
+
+    if (!Array.isArray(selected_outputs) || selected_outputs.length === 0) {
+      return jsonResponse(
+        { error: 'selected_outputs must contain at least one output type' },
+        400
+      );
+    }
+
+    if (model === 'RICE') {
+      const missing = [
+        rice_config?.reachColumn ? null : 'reachColumn',
+        rice_config?.impactColumn ? null : 'impactColumn',
+        rice_config?.confidenceColumn ? null : 'confidenceColumn',
+        rice_config?.effortColumn ? null : 'effortColumn',
+      ].filter(Boolean);
+      if (missing.length > 0) {
+        return jsonResponse(
+          { error: `Missing RICE config fields: ${missing.join(', ')}` },
+          400
+        );
+      }
+    }
+
+    if (model === 'MoSCoW' && !moscow_config?.moscowColumn) {
+      return jsonResponse(
+        { error: 'Missing MoSCoW config field: moscowColumn' },
+        400
+      );
+    }
+
+    if (model === 'Value/Effort') {
+      const missing = [
+        value_effort_config?.valueColumn ? null : 'valueColumn',
+        value_effort_config?.effortColumn ? null : 'effortColumn',
+      ].filter(Boolean);
+      if (missing.length > 0) {
+        return jsonResponse(
+          { error: `Missing Value/Effort config fields: ${missing.join(', ')}` },
+          400
+        );
+      }
+    }
+
+    if (model === 'Custom') {
+      if (!Array.isArray(custom_config?.factors) || custom_config.factors.length === 0) {
+        return jsonResponse(
+          { error: 'Custom model requires at least one factor in custom_config.factors' },
+          400
+        );
+      }
     }
   
   /* ---------------- Load Project Context Documents ---------------- */
@@ -237,8 +322,66 @@ const projectArtifactsContext =
 
     /* ---------------- Prompt Assembly ---------------- */
 
+    const modelSpecificConfigLines: string[] = [];
+    let modelSpecificNotes = '';
+
+    if (model === 'WSJF') {
+      modelSpecificConfigLines.push(
+        `- Effort Field: ${effort_field_name}`,
+        `- Max Score Per Factor: ${max_score_per_factor}`,
+        `- Normalize Scores: ${normalize_scores ? 'Yes' : 'No'}`,
+      );
+      modelSpecificNotes = 'Use WSJF-style prioritization signals in the CSV for ranking and tradeoffs.';
+    }
+
+    if (model === 'RICE') {
+      modelSpecificConfigLines.push(
+        `- Reach Column: ${rice_config.reachColumn}`,
+        `- Impact Column: ${rice_config.impactColumn}`,
+        `- Confidence Column: ${rice_config.confidenceColumn}`,
+        `- Effort Column: ${rice_config.effortColumn}`,
+        `- Normalize Scores: ${rice_config.normalizeScores ? 'Yes' : 'No'}`,
+      );
+      modelSpecificNotes = 'Use the provided RICE columns to drive prioritization and recommendations.';
+    }
+
+    if (model === 'MoSCoW') {
+      modelSpecificConfigLines.push(
+        `- MoSCoW Column: ${moscow_config.moscowColumn}`,
+        `- Must maps to: ${moscow_config.categoryMapping?.must ?? 'Must'}`,
+        `- Should maps to: ${moscow_config.categoryMapping?.should ?? 'Should'}`,
+        `- Could maps to: ${moscow_config.categoryMapping?.could ?? 'Could'}`,
+        `- Won't maps to: ${moscow_config.categoryMapping?.wont ?? "Won't"}`,
+      );
+      modelSpecificNotes = 'Prioritize by MoSCoW category ordering and execution sequencing implications.';
+    }
+
+    if (model === 'Value/Effort') {
+      modelSpecificConfigLines.push(
+        `- Value Column: ${value_effort_config.valueColumn}`,
+        `- Effort Column: ${value_effort_config.effortColumn}`,
+        `- Invert Ranking: ${value_effort_config.invertRanking ? 'Yes' : 'No'}`,
+        `- Normalize Scores: ${value_effort_config.normalizeScores ? 'Yes' : 'No'}`,
+      );
+      modelSpecificNotes = 'Use Value/Effort scoring signals and highlight quick wins versus heavier bets.';
+    }
+
+    if (model === 'Custom') {
+      const customFactorLines = custom_config.factors
+        .map((factor: Record<string, unknown>, index: number) => (
+          `  ${index + 1}. ${String(factor.factorName ?? `Factor ${index + 1}`)} | Column: ${String(factor.csvColumn ?? '')} | Weight: ${String(factor.weight ?? '')}`
+        ))
+        .join('\n');
+      modelSpecificConfigLines.push(
+        `- Normalize Scores: ${custom_config.normalizeScores ? 'Yes' : 'No'}`,
+        '- Factors:',
+        customFactorLines,
+      );
+      modelSpecificNotes = 'Apply the custom weighted factor configuration to prioritize backlog items.';
+    }
+
     let userPrompt = `
-You are reviewing a backlog for WSJF prioritization.
+You are reviewing a backlog for ${MODEL_LABELS[model]} prioritization.
 
 The CSV below is provided ONLY so you can derive rankings and insights.
 DO NOT reproduce the dataset or calculations in your output.
@@ -246,10 +389,11 @@ DO NOT reproduce the dataset or calculations in your output.
 BACKLOG DATA (internal analysis only):
 ${csv_content}
 
-CONFIGURATION:
-- Effort Field: ${effort_field_name}
-- Max Score Per Factor: ${max_score_per_factor}
-- Normalize Scores: ${normalize_scores ? 'Yes' : 'No'}
+PRIORITIZATION MODEL:
+- ${MODEL_LABELS[model]}
+
+MODEL CONFIGURATION:
+${modelSpecificConfigLines.join('\n')}
 `;
 
     if (initiative_name) {
@@ -279,6 +423,8 @@ Only include what materially supports these outputs.
     ) {
       userPrompt += `\nFocus on the top ${top_n_items} items only.\n`;
     }
+
+    userPrompt += `\nMODEL-SPECIFIC ANALYSIS DIRECTION:\n${modelSpecificNotes}\n`;
 
 if (projectDocsContext) {
   userPrompt += `
@@ -351,12 +497,13 @@ REQUIRED FINAL SECTION:
         artifact_type: 'prioritization',
         artifact_name:
           artifact_name ??
-          `WSJF Prioritization – ${new Date().toLocaleDateString()}`,
+          `${MODEL_LABELS[model]} Prioritization – ${new Date().toLocaleDateString()}`,
         input_data: {
           schema_version: 1,
           input_mode: 'csv',
           selected_outputs,
           input: {
+            model,
             initiative_name,
             effort_field_name,
             max_score_per_factor,
@@ -364,12 +511,16 @@ REQUIRED FINAL SECTION:
             top_n_items,
             default_effort_scale,
             notes_context,
+            rice_config,
+            moscow_config,
+            value_effort_config,
+            custom_config,
           },
         },
         output_data: output,
         metadata: {
           input_schema_version: 1,
-          model: 'WSJF',
+          model,
           tokens_used: completion.usage?.total_tokens,
           duration_ms: durationMs,
           context_documents_used: projectDocsContext ? true : false,

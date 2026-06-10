@@ -10,17 +10,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
-import { ArrowLeft, ArrowRight, Loader2, Copy, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, Plus, Trash2 } from 'lucide-react';
 import { analyzeMeeting } from '@/lib/agent';
 import { supabaseFetch } from '@/lib/supabase';
-import { MeetingInputMode, MeetingSession, MEETING_TYPES, ProjectArtifactRow } from '@/types/meeting';
-import { SampleTranscriptDialog } from '@/components/SampleTranscriptDialog';
+import { ExtractedActionItem, MeetingInputMode, MeetingSession, MEETING_TYPES, ProjectArtifactRow } from '@/types/meeting';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import ReactMarkdown from 'react-markdown';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { useSearchParams } from 'react-router-dom';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
+import { createProjectTask } from '@/lib/projectTasks';
+import { PROJECT_TASK_MODULE_LABELS, ProjectTaskModule } from '@/types/project-tasks';
 
 
 export default function MeetingIntelligence() {
@@ -33,7 +34,7 @@ export default function MeetingIntelligence() {
 
   // Form state
   const [transcript, setTranscript] = useState('');
-  const [inputMode, setInputMode] = useState<MeetingInputMode>('transcript');
+  const [inputMode, setInputMode] = useState<MeetingInputMode>('notes_cleanup');
   const [meetingType, setMeetingType] = useState<string>('');
   const [projectName, setProjectName] = useState('');
   const [participants, setParticipants] = useState('');
@@ -44,13 +45,14 @@ export default function MeetingIntelligence() {
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [currentOutput, setCurrentOutput] = useState<string>('');
   const [currentArtifactId, setCurrentArtifactId] = useState<string | null>(null);
+  const [actionItems, setActionItems] = useState<ExtractedActionItem[]>([]);
+  const [savedActionItemKeys, setSavedActionItemKeys] = useState<Set<string>>(new Set());
+  const [isSavingActionItems, setIsSavingActionItems] = useState(false);
 
 
 // 🔑 MAIN RESULTS TABS CONTROL
 type ResultsTab = 'current' | 'history';
 const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
-
-  const [copiedToClipboard, setCopiedToClipboard] = useState(false);
 
   // Versioning
   const [isEditing, setIsEditing] = useState(false);
@@ -104,7 +106,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
   const artifactToMeetingSession = (a: ProjectArtifactRow): MeetingSession => {
     const input = a.input_data ?? {};
     const nestedInput = (input.input ?? {}) as Record<string, unknown>;
-    const metadata = (a.metadata ?? {}) as Record<string, any>;
+    const metadata = (a.metadata ?? {}) as Record<string, unknown>;
     const inputMode =
       input.input_mode === 'notes_cleanup' ? 'notes_cleanup' : 'transcript';
     const sourceText =
@@ -125,8 +127,11 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       participants: (input.participants as string) ?? (nestedInput.participants as string) ?? null,
       transcript: sourceText,
       output: a.output_data ?? null,
+      action_items: Array.isArray(metadata.action_items)
+        ? (metadata.action_items as ExtractedActionItem[])
+        : [],
       metadata,
-      version: metadata.version ?? 1, 
+      version: typeof metadata.version === 'number' ? metadata.version : 1, 
     };
   };
 
@@ -243,6 +248,8 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       console.log('✨ [Success] Received AI-generated output', { outputLength: result.output.length });
       setCurrentOutput(result.output);
       setCurrentArtifactId(result.artifact_id ?? null);
+      setActionItems(result.action_items ?? []);
+      setSavedActionItemKeys(new Set());
 
       console.log('💾 [Database] Saving to project_artifacts table...');
       console.log('💾 [Database] Saved successfully');
@@ -252,11 +259,11 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       toast({
         title: 'Success',
         description:
-          inputMode === 'notes_cleanup'
-            ? 'Notes cleaned up successfully'
-            : 'Meeting analyzed successfully',
+          (result.action_items?.length ?? 0) > 0
+            ? `Notes analyzed with ${result.action_items?.length} action item${result.action_items?.length === 1 ? '' : 's'} ready for review`
+            : 'Notes analyzed successfully',
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('💥 [Error Handler] Caught error:', err);
 
       const errorMessage = parseErrorMessage(err);
@@ -279,9 +286,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
 
     try {
       await navigator.clipboard.writeText(currentOutput);
-      setCopiedToClipboard(true);
       toast({ title: 'Copied!', description: 'Analysis copied to clipboard' });
-      setTimeout(() => setCopiedToClipboard(false), 2000);
     } catch (err) {
       toast({ title: 'Error', description: 'Failed to copy to clipboard', variant: 'destructive' });
     }
@@ -309,6 +314,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
             version: currentVersion + 1,
             last_modified_by: 'user',
             last_modified_at: new Date().toISOString(),
+            action_items: actionItems,
           },
         }),
       });
@@ -335,6 +341,97 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     }
   };
 
+  const getActionItemKey = (item: ExtractedActionItem, index: number) =>
+    item.id || `action-${index}`;
+
+  const updateActionItem = (
+    index: number,
+    updates: Partial<ExtractedActionItem>
+  ) => {
+    setActionItems((prev) =>
+      prev.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, ...updates } : item
+      )
+    );
+  };
+
+  const removeActionItem = (index: number) => {
+    setActionItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const addBlankActionItem = () => {
+    setActionItems((prev) => [
+      ...prev,
+      {
+        id: `manual-${Date.now()}`,
+        title: '',
+        description: null,
+        due_date: null,
+        owner: null,
+        confidence: 'medium',
+        context_validation: null,
+        source_evidence: null,
+        related_module: null,
+      },
+    ]);
+  };
+
+  const handleSaveActionItems = async () => {
+    if (!activeProject) {
+      toast({ title: 'Error', description: 'No active project selected', variant: 'destructive' });
+      return;
+    }
+
+    const unsavedItems = actionItems
+      .map((item, index) => ({ item, index, key: getActionItemKey(item, index) }))
+      .filter(({ item, key }) => item.title.trim() && !savedActionItemKeys.has(key));
+
+    if (unsavedItems.length === 0) {
+      toast({ title: 'No new action items', description: 'There are no unsaved action items to add.' });
+      return;
+    }
+
+    setIsSavingActionItems(true);
+    try {
+      const savedKeys = new Set(savedActionItemKeys);
+
+      for (const { item, key } of unsavedItems) {
+        const descriptionParts = [
+          item.description?.trim(),
+          item.owner?.trim() ? `Owner: ${item.owner.trim()}` : null,
+          item.source_evidence?.trim() ? `Source: ${item.source_evidence.trim()}` : null,
+          item.context_validation?.trim()
+            ? `Context validation: ${item.context_validation.trim()}`
+            : null,
+        ].filter(Boolean);
+
+        await createProjectTask({
+          project_id: activeProject.id,
+          title: item.title.trim(),
+          description: descriptionParts.length > 0 ? descriptionParts.join('\n\n') : null,
+          due_date: item.due_date || null,
+          related_module: toProjectTaskModule(item.related_module),
+        });
+        savedKeys.add(key);
+      }
+
+      setSavedActionItemKeys(savedKeys);
+      toast({
+        title: 'Action items saved',
+        description: `${unsavedItems.length} item${unsavedItems.length === 1 ? '' : 's'} added to Project Tasks.`,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unable to add these items to Project Tasks.';
+      toast({
+        title: 'Failed to save action items',
+        description: message,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSavingActionItems(false);
+    }
+  };
+
 
   const loadSession = (session: MeetingSession) => {
     setCurrentArtifactId(session.id); 
@@ -344,6 +441,8 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     setMeetingType(session.meeting_type ?? '');
     setProjectName(session.artifact_name ?? session.project_name ?? '');
     setParticipants(session.participants ?? '');
+    setActionItems(session.action_items ?? []);
+    setSavedActionItemKeys(new Set());
 
     
     // Reset editing state
@@ -374,23 +473,22 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
   };
 
   const isNotesCleanupMode = inputMode === 'notes_cleanup';
-  const inputCardTitle = isNotesCleanupMode ? 'Note Cleanup' : 'Meeting Transcript';
-  const inputCardDescription = isNotesCleanupMode
-    ? 'Paste rough meeting notes and the agent will clean them into organized notes'
-    : 'Paste your meeting transcript and provide optional context';
+  const inputCardTitle = 'Project Notes';
+  const inputCardDescription =
+    'Capture raw notes, validate them against project context, and extract reviewable action items.';
   const inputLabel = isNotesCleanupMode ? 'Raw Notes' : 'Meeting Transcript';
   const inputPlaceholder = isNotesCleanupMode
-    ? 'Paste your rough notes here. Bullet fragments and shorthand are fine.'
+    ? 'Paste your rough notes here. Bullet fragments, shorthand, decisions, and reminders are fine.'
     : 'Paste your meeting transcript here...';
-  const runButtonLabel = isNotesCleanupMode ? 'Clean Up Notes' : 'Analyze Meeting';
+  const runButtonLabel = isNotesCleanupMode ? 'Analyze Notes' : 'Analyze Transcript';
   const runButtonBusyLabel = isNotesCleanupMode
-    ? 'Cleaning up your notes...'
-    : 'Analyzing your meeting...';
+    ? 'Analyzing your notes...'
+    : 'Analyzing your transcript...';
   const emptyStateLabel = isNotesCleanupMode
-    ? 'No results yet. Enter raw notes and click "Clean Up Notes".'
-    : 'No analysis yet. Enter a transcript and click "Analyze Meeting".';
+    ? 'No results yet. Enter raw notes and click "Analyze Notes".'
+    : 'No analysis yet. Enter a transcript and click "Analyze Transcript".';
   const sessionModeLabel = (mode: MeetingInputMode) =>
-    mode === 'notes_cleanup' ? 'Notes Cleanup' : 'Transcript';
+    mode === 'notes_cleanup' ? 'Project Notes' : 'Transcript';
 
   return (
     <div className="min-h-screen bg-[#F9FAFB]">
@@ -410,8 +508,8 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
               </Button>
               <Separator orientation="vertical" className="h-6" />
               <div>
-                <h1 className="text-xl font-semibold text-[#111827]">Meeting Intelligence</h1>
-                <p className="text-sm text-[#6B7280]">AI-powered meeting analysis and note cleanup</p>
+                <h1 className="text-xl font-semibold text-[#111827]">Project Notes</h1>
+                <p className="text-sm text-[#6B7280]">Context-aware notes, action extraction, and task handoff</p>
               </div>
             </div>
           </div>
@@ -483,8 +581,8 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                         onValueChange={(value) => setInputMode(value as MeetingInputMode)}
                       >
                         <TabsList className="grid w-full grid-cols-2">
-                          <TabsTrigger value="transcript">Meeting Transcript</TabsTrigger>
-                          <TabsTrigger value="notes_cleanup">Notes Cleanup</TabsTrigger>
+                          <TabsTrigger value="notes_cleanup">Project Notes</TabsTrigger>
+                          <TabsTrigger value="transcript">Transcript</TabsTrigger>
                         </TabsList>
                       </Tabs>
                     </div>
@@ -507,7 +605,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
                         <Label htmlFor="meeting-type" className="text-[13px] font-medium text-[#6B7280]">
-                          Meeting Type
+                          Note Type
                         </Label>
                         <Select value={meetingType} onValueChange={setMeetingType}>
                           <SelectTrigger id="meeting-type">
@@ -575,7 +673,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
             <CardHeader className="pb-3">
               <div className="flex items-center gap-3">
                 <CardTitle className="text-lg font-semibold text-[#111827]">
-                  Analysis Results
+                  Notes Analysis
                 </CardTitle>
 
                 <Badge variant="secondary">
@@ -592,7 +690,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                 className="h-full"
               >
                 <TabsList className="grid w-full grid-cols-2 bg-transparent border-b border-[#E5E7EB] rounded-none h-auto p-0">
-                  <TabsTrigger value="current">Current Analysis</TabsTrigger>
+                  <TabsTrigger value="current">Current Notes</TabsTrigger>
                   <TabsTrigger value="history">Session History</TabsTrigger>
                 </TabsList>
 
@@ -667,6 +765,176 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                           </div>
                         )}
 
+                        <div className="rounded-lg border border-[#E5E7EB] bg-white p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <h2 className="text-sm font-semibold text-[#111827]">
+                                Proposed Action Items
+                              </h2>
+                              <p className="mt-1 text-xs text-[#6B7280]">
+                                Review, edit, and save the items you want added to Project Tasks.
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={addBlankActionItem}
+                              >
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Item
+                              </Button>
+                              <Button
+                                size="sm"
+                                onClick={() => void handleSaveActionItems()}
+                                disabled={
+                                  isSavingActionItems ||
+                                  actionItems.every((item, index) =>
+                                    !item.title.trim() ||
+                                    savedActionItemKeys.has(getActionItemKey(item, index))
+                                  )
+                                }
+                              >
+                                {isSavingActionItems ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Saving
+                                  </>
+                                ) : (
+                                  'Save to Tasks'
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+
+                          {actionItems.length === 0 ? (
+                            <div className="mt-4 rounded-md border border-dashed border-[#D1D5DB] p-4 text-sm text-[#6B7280]">
+                              No action items were identified. Add one manually if the notes imply follow-up work.
+                            </div>
+                          ) : (
+                            <div className="mt-4 space-y-3">
+                              {actionItems.map((item, index) => {
+                                const itemKey = getActionItemKey(item, index);
+                                const isSaved = savedActionItemKeys.has(itemKey);
+
+                                return (
+                                  <div
+                                    key={itemKey}
+                                    className="rounded-md border border-[#E5E7EB] bg-[#F9FAFB] p-3"
+                                  >
+                                    <div className="flex flex-col gap-3">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <Input
+                                          value={item.title}
+                                          onChange={(event) =>
+                                            updateActionItem(index, { title: event.target.value })
+                                          }
+                                          placeholder="Action item title"
+                                          disabled={isSaved}
+                                          className="bg-white"
+                                        />
+                                        <div className="flex shrink-0 items-center gap-2">
+                                          {isSaved ? (
+                                            <Badge variant="secondary">Saved</Badge>
+                                          ) : null}
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => removeActionItem(index)}
+                                            disabled={isSaved}
+                                          >
+                                            <Trash2 className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                      </div>
+
+                                      <div className="grid gap-3 md:grid-cols-[160px_1fr_220px]">
+                                        <div className="space-y-1">
+                                          <Label className="text-xs text-[#6B7280]">Due Date</Label>
+                                          <Input
+                                            type="date"
+                                            value={item.due_date ?? ''}
+                                            onChange={(event) =>
+                                              updateActionItem(index, {
+                                                due_date: event.target.value || null,
+                                              })
+                                            }
+                                            disabled={isSaved}
+                                            className="bg-white"
+                                          />
+                                        </div>
+
+                                        <div className="space-y-1">
+                                          <Label className="text-xs text-[#6B7280]">Owner</Label>
+                                          <Input
+                                            value={item.owner ?? ''}
+                                            onChange={(event) =>
+                                              updateActionItem(index, {
+                                                owner: event.target.value || null,
+                                              })
+                                            }
+                                            placeholder="Optional"
+                                            disabled={isSaved}
+                                            className="bg-white"
+                                          />
+                                        </div>
+
+                                        <div className="space-y-1">
+                                          <Label className="text-xs text-[#6B7280]">Related Module</Label>
+                                          <select
+                                            value={item.related_module ?? ''}
+                                            onChange={(event) =>
+                                              updateActionItem(index, {
+                                                related_module: event.target.value || null,
+                                              })
+                                            }
+                                            disabled={isSaved}
+                                            className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm"
+                                          >
+                                            <option value="">None</option>
+                                            {Object.entries(PROJECT_TASK_MODULE_LABELS).map(([value, label]) => (
+                                              <option key={value} value={value}>
+                                                {label}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      </div>
+
+                                      <Textarea
+                                        value={item.description ?? ''}
+                                        onChange={(event) =>
+                                          updateActionItem(index, {
+                                            description: event.target.value || null,
+                                          })
+                                        }
+                                        placeholder="Optional task details"
+                                        disabled={isSaved}
+                                        className="min-h-[80px] bg-white text-sm"
+                                      />
+
+                                      <div className="grid gap-3 text-xs text-[#6B7280] md:grid-cols-2">
+                                        {item.source_evidence ? (
+                                          <div>
+                                            <span className="font-medium text-[#374151]">Source: </span>
+                                            {item.source_evidence}
+                                          </div>
+                                        ) : null}
+                                        {item.context_validation ? (
+                                          <div>
+                                            <span className="font-medium text-[#374151]">Context: </span>
+                                            {item.context_validation}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
                         {/* OUTPUT */}
                         <div className="prose prose-sm max-w-none rounded-lg border border-[#E5E7EB] bg-white p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
                           {isEditing ? (
@@ -734,4 +1002,16 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       </div>
     </div>
   );
+}
+
+function toProjectTaskModule(value?: string | null): ProjectTaskModule | null {
+  switch (value) {
+    case 'meeting_intelligence':
+    case 'product_documentation':
+    case 'release_communications':
+    case 'prioritization':
+      return value;
+    default:
+      return null;
+  }
 }

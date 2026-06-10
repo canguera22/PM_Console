@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { getFunctionErrorMessage } from './function-errors';
+import type { ExtractedActionItem } from '@/types/meeting';
 
 export interface MeetingAnalysisInput {
   // ✅ REQUIRED: UUID string so Edge Function can store artifact under the correct project
@@ -19,12 +20,14 @@ export interface MeetingAnalysisResult {
   output: string;
   session_id?: string;
   artifact_id?: string;
+  action_items?: ExtractedActionItem[];
 }
 
 type MeetingEdgeResponse = {
   output: string;
   session_id?: string;
   artifact_id?: string;
+  action_items?: ExtractedActionItem[];
 };
 
 export async function analyzeMeeting(
@@ -50,5 +53,6 @@ export async function analyzeMeeting(
     output: data.output,
     session_id: data.session_id,
     artifact_id: data.artifact_id,
+    action_items: Array.isArray(data.action_items) ? data.action_items : [],
   };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, CalendarDays, CheckCircle2, ClipboardList } from 'lucide-react';
+import { ArrowRight, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
@@ -29,11 +29,19 @@ const TASK_MODULE_ROUTES: Record<ProjectTaskModule, string> = {
 interface ProjectTaskPanelProps {
   activeProject: ActiveProject | null;
   compact?: boolean;
+  expandableItems?: boolean;
+  listMaxHeightClass?: string;
+  readOnly?: boolean;
+  headerAction?: React.ReactNode;
 }
 
 export function ProjectTaskPanel({
   activeProject,
   compact = false,
+  expandableItems = false,
+  listMaxHeightClass,
+  readOnly = false,
+  headerAction,
 }: ProjectTaskPanelProps) {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
@@ -46,6 +54,7 @@ export function ProjectTaskPanel({
   const [availableArtifacts, setAvailableArtifacts] = useState<ProjectArtifact[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [selectedArtifactId, setSelectedArtifactId] = useState('');
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!activeProject) {
@@ -67,7 +76,10 @@ export function ProjectTaskPanel({
     [tasks]
   );
 
-  const visibleTasks = compact ? openTasks.slice(0, 5) : tasks;
+  const isCondensed = compact || expandableItems;
+  const showComposer = !readOnly;
+  const showArtifactLinker = !readOnly;
+  const visibleTasks = compact && !expandableItems ? openTasks.slice(0, 5) : tasks;
   const linkableArtifacts = useMemo(
     () =>
       availableArtifacts.filter(
@@ -221,6 +233,116 @@ export function ProjectTaskPanel({
       task.completed_artifact_type
         ? PROJECT_TASK_MODULE_LABELS[task.completed_artifact_type]
         : null;
+    const isExpanded = expandedTaskIds.has(task.id);
+    const toggleExpanded = () => {
+      setExpandedTaskIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(task.id)) {
+          next.delete(task.id);
+        } else {
+          next.add(task.id);
+        }
+        return next;
+      });
+    };
+
+    if (expandableItems) {
+      return (
+        <div
+          key={task.id}
+          className="rounded-lg border border-[#E5E7EB] bg-white"
+        >
+          <button
+            type="button"
+            onClick={toggleExpanded}
+            className="flex w-full items-start justify-between gap-3 p-3 text-left transition hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3B82F6] focus-visible:ring-offset-2"
+            aria-expanded={isExpanded}
+          >
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className={`text-sm font-medium ${task.status === 'completed' ? 'text-[#6B7280] line-through' : 'text-[#111827]'}`}>
+                  {task.title}
+                </p>
+                <Badge variant={task.status === 'completed' ? 'secondary' : 'outline'}>
+                  {task.status === 'completed' ? 'Completed' : 'Open'}
+                </Badge>
+                {moduleLabel ? (
+                  <Badge variant="outline" className="bg-[#EFF6FF] text-[#1D4ED8]">
+                    {moduleLabel}
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B7280]">
+                {dueLabel ? (
+                  <span className="inline-flex items-center gap-1">
+                    <CalendarDays className="h-3.5 w-3.5" />
+                    Due {dueLabel}
+                  </span>
+                ) : (
+                  <span>No due date</span>
+                )}
+                {task.status === 'completed' && linkedArtifactLabel ? (
+                  <span>Completed via: {linkedArtifactLabel}</span>
+                ) : null}
+              </div>
+            </div>
+            <ChevronDown
+              className={`mt-1 h-4 w-4 shrink-0 text-[#9CA3AF] transition-transform ${
+                isExpanded ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+
+          {isExpanded ? (
+            <div className="border-t border-[#E5E7EB] p-3">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B7280]">
+                  <span>Created by: {task.created_by_email ?? 'Unknown'}</span>
+                  <span>Updated by: {task.updated_by_email ?? task.created_by_email ?? 'Unknown'}</span>
+                </div>
+
+                {task.description ? (
+                  <p className="whitespace-pre-line rounded-md bg-[#F9FAFB] p-3 text-sm text-[#374151]">
+                    {task.description}
+                  </p>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {task.status === 'completed' && linkedArtifactRoute ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigate(linkedArtifactRoute)}
+                    >
+                      View Artifact
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  ) : null}
+                  {task.related_module && task.status === 'open' ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigate(TASK_MODULE_ROUTES[task.related_module!])}
+                    >
+                      Open Module
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant={task.status === 'completed' ? 'outline' : 'default'}
+                    onClick={() => void handleToggleTask(task)}
+                  >
+                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                    {task.status === 'completed' ? 'Reopen' : 'Complete'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -307,12 +429,15 @@ export function ProjectTaskPanel({
               Project Tasks
             </CardTitle>
             <CardDescription>
-              Track PM admin work and tie it to the module that will produce the deliverable.
+              {readOnly
+                ? 'Review open and completed work tied to this project.'
+                : 'Track PM admin work and tie it to the module that will produce the deliverable.'}
             </CardDescription>
           </div>
           <div className="flex items-center gap-2 text-xs text-[#6B7280]">
             <Badge variant="outline">{openTasks.length} open</Badge>
-            {!compact ? <Badge variant="secondary">{completedTasks.length} completed</Badge> : null}
+            {!compact || expandableItems ? <Badge variant="secondary">{completedTasks.length} completed</Badge> : null}
+            {headerAction}
           </div>
         </div>
       </CardHeader>
@@ -324,66 +449,70 @@ export function ProjectTaskPanel({
           </div>
         ) : (
           <>
-            <div className={`grid gap-3 ${compact ? 'lg:grid-cols-[minmax(0,1.5fr)_160px_220px_auto]' : 'lg:grid-cols-[minmax(0,1.6fr)_180px_240px_auto]'}`}>
-              <div className="space-y-2">
-                <Label htmlFor={compact ? 'dashboard-task-title' : 'project-dashboard-task-title'}>
-                  Task
-                </Label>
-                <Input
-                  id={compact ? 'dashboard-task-title' : 'project-dashboard-task-title'}
-                  placeholder="e.g., Draft release notes for 03/15"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  disabled={isSubmitting}
-                />
-              </div>
+            {showComposer ? (
+              <div className={`grid gap-3 ${isCondensed ? 'grid-cols-[minmax(0,1fr)_44px] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px]' : 'lg:grid-cols-[minmax(0,1.6fr)_180px_240px_auto]'}`}>
+                <div className={`space-y-2 ${isCondensed ? 'sm:col-span-2' : ''}`}>
+                  <Label htmlFor={compact ? 'dashboard-task-title' : 'project-dashboard-task-title'}>
+                    Task or note
+                  </Label>
+                  <Input
+                    id={compact ? 'dashboard-task-title' : 'project-dashboard-task-title'}
+                    placeholder="Capture the next thing to move forward"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    disabled={isSubmitting}
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor={compact ? 'dashboard-task-due' : 'project-dashboard-task-due'}>
-                  Due Date
-                </Label>
-                <Input
-                  id={compact ? 'dashboard-task-due' : 'project-dashboard-task-due'}
-                  type="date"
-                  value={dueDate}
-                  onChange={(e) => setDueDate(e.target.value)}
-                  disabled={isSubmitting}
-                />
-              </div>
+                <div className={`flex items-end ${isCondensed ? 'sm:col-start-3' : ''}`}>
+                  <Button
+                    onClick={() => void handleCreateTask()}
+                    disabled={isSubmitting || !title.trim()}
+                    className={isCondensed ? 'h-10 w-10 p-0' : 'w-full'}
+                    aria-label="Add task"
+                    title="Add task"
+                  >
+                    {isCondensed ? <Plus className="h-4 w-4" /> : 'Add Task'}
+                  </Button>
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor={compact ? 'dashboard-task-module' : 'project-dashboard-task-module'}>
-                  Related Module
-                </Label>
-                <select
-                  id={compact ? 'dashboard-task-module' : 'project-dashboard-task-module'}
-                  value={relatedModule}
-                  onChange={(e) => setRelatedModule(e.target.value)}
-                  disabled={isSubmitting}
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value="">None</option>
-                  {PROJECT_TASK_MODULES.map((module) => (
-                    <option key={module} value={module}>
-                      {PROJECT_TASK_MODULE_LABELS[module]}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                <div className={`space-y-2 ${isCondensed ? 'col-span-2 sm:col-span-1' : ''}`}>
+                  <Label htmlFor={compact ? 'dashboard-task-due' : 'project-dashboard-task-due'}>
+                    Due Date
+                  </Label>
+                  <Input
+                    id={compact ? 'dashboard-task-due' : 'project-dashboard-task-due'}
+                    type="date"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                    disabled={isSubmitting}
+                  />
+                </div>
 
-              <div className="flex items-end">
-                <Button
-                  onClick={() => void handleCreateTask()}
-                  disabled={isSubmitting || !title.trim()}
-                  className="w-full"
-                >
-                  Add Task
-                </Button>
+                <div className={`space-y-2 ${isCondensed ? 'col-span-2 sm:col-span-2' : ''}`}>
+                  <Label htmlFor={compact ? 'dashboard-task-module' : 'project-dashboard-task-module'}>
+                    Related Module
+                  </Label>
+                  <select
+                    id={compact ? 'dashboard-task-module' : 'project-dashboard-task-module'}
+                    value={relatedModule}
+                    onChange={(e) => setRelatedModule(e.target.value)}
+                    disabled={isSubmitting}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="">None</option>
+                    {PROJECT_TASK_MODULES.map((module) => (
+                      <option key={module} value={module}>
+                        {PROJECT_TASK_MODULE_LABELS[module]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            </div>
+            ) : null}
 
-            {openTasks.length > 0 && linkableArtifacts.length > 0 ? (
-              <div className={`grid gap-3 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-4 ${compact ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto]' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto]'}`}>
+            {showArtifactLinker && openTasks.length > 0 && linkableArtifacts.length > 0 ? (
+              <div className={`grid gap-3 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-4 ${isCondensed ? 'lg:grid-cols-1' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto]'}`}>
                 <div className="space-y-2">
                   <Label htmlFor={compact ? 'dashboard-link-task' : 'project-dashboard-link-task'}>
                     Link Existing Task
@@ -446,7 +575,7 @@ export function ProjectTaskPanel({
                   : 'No tasks yet for this project.'}
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className={`space-y-3 ${listMaxHeightClass ? `${listMaxHeightClass} overflow-y-auto pr-1` : ''}`}>
                 {visibleTasks.map(renderTask)}
                 {compact && openTasks.length > visibleTasks.length ? (
                   <p className="text-xs text-[#6B7280]">

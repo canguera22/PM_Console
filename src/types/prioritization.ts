@@ -119,6 +119,7 @@ export interface WSJFCalculationInput {
   csv_content: string;
   project_id: string;
   project_name?: string;
+  model?: PrioritizationModel;
   initiative_name?: string;
   default_effort_scale?: string;
   notes_context?: string;
@@ -131,6 +132,32 @@ export interface WSJFCalculationInput {
 }
 
 export interface WSJFCalculationResult {
+  output: string;
+  session_id?: string;
+  artifact_id?: string;
+}
+
+export interface PrioritizationCalculationInput {
+  csv_content: string;
+  project_id: string;
+  project_name?: string;
+  model: PrioritizationModel;
+  initiative_name?: string;
+  default_effort_scale?: string;
+  notes_context?: string;
+  artifact_name?: string;
+  selected_outputs: string[];
+  top_n_items?: number;
+  effort_field_name?: string;
+  max_score_per_factor?: number;
+  normalize_scores?: boolean;
+  rice_config?: RICEConfig;
+  moscow_config?: MoSCoWConfig;
+  value_effort_config?: ValueEffortConfig;
+  custom_config?: CustomScoringConfig;
+}
+
+export interface PrioritizationCalculationResult {
   output: string;
   session_id?: string;
   artifact_id?: string;

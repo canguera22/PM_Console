@@ -8,6 +8,8 @@ import MeetingIntelligence from "./pages/MeetingIntelligence";
 import ProductDocumentation from "./pages/ProductDocumentation";
 import ReleaseCommunications from "./pages/ReleaseCommunications";
 import Prioritization from "./pages/Prioritization";
+import Tasks from "./pages/Tasks";
+import ContextDocs from "./pages/ContextDocs";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import NotFound from "./pages/NotFound";
@@ -35,6 +37,14 @@ const routes = [
           {
             path: "dashboard",
             element: <ProjectDashboard />,
+          },
+          {
+            path: "tasks",
+            element: <Tasks />,
+          },
+          {
+            path: "context",
+            element: <ContextDocs />,
           },
           {
             path: "meetings",

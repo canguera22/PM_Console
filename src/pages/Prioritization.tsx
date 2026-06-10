@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, ArrowRight, Loader2, Copy, CheckCircle2, Upload, X, Download, Info, Plus, Trash2 } from 'lucide-react';
-import { calculateWSJF } from '@/lib/prioritization-agent';
+import { calculatePrioritization } from '@/lib/prioritization-agent';
 import { supabaseFetch } from '@/lib/supabase';
 import { ProjectArtifact } from '@/types/project-artifacts';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
@@ -436,7 +436,39 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
     }
   };
 
-  // Calculate WSJF or show placeholder for other models
+  const getSelectedOutputsForModel = () => {
+    switch (selectedModel) {
+      case 'WSJF':
+        return selectedOutputs;
+      case 'RICE':
+        return riceConfig.selectedOutputs;
+      case 'MoSCoW':
+        return moscowConfig.selectedOutputs;
+      case 'Value/Effort':
+        return valueEffortConfig.selectedOutputs;
+      case 'Custom':
+        return customConfig.selectedOutputs;
+      default:
+        return [];
+    }
+  };
+
+  const getTopNForModel = () => {
+    switch (selectedModel) {
+      case 'WSJF':
+        return topNItems;
+      case 'RICE':
+        return riceConfig.topNItems;
+      case 'Value/Effort':
+        return valueEffortConfig.topNItems;
+      case 'Custom':
+        return customConfig.topNItems;
+      default:
+        return undefined;
+    }
+  };
+
+  // Calculate selected prioritization model
     const handleCalculate = async () => {
       setSearchParams({});
       setError(null);
@@ -465,15 +497,8 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
     }
 
     // Check if outputs are selected based on model
-    const hasOutputs = selectedModel === 'WSJF' 
-      ? selectedOutputs.length > 0
-      : selectedModel === 'RICE'
-      ? riceConfig.selectedOutputs.length > 0
-      : selectedModel === 'MoSCoW'
-      ? moscowConfig.selectedOutputs.length > 0
-      : selectedModel === 'Value/Effort'
-      ? valueEffortConfig.selectedOutputs.length > 0
-      : customConfig.selectedOutputs.length > 0;
+    const selectedOutputsForModel = getSelectedOutputsForModel();
+    const hasOutputs = selectedOutputsForModel.length > 0;
 
     if (!hasOutputs) {
       const errorMsg = 'Please select at least one output type';
@@ -486,59 +511,59 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
       return;
     }
 
-    // Only WSJF is functional for now
-    if (selectedModel !== 'WSJF') {
-      toast({
-        title: 'Model not yet active',
-        description: `${selectedModel} scoring is configured but not enabled yet.`,
-      });
-      return;
-    }
-
     setIsCalculating(true);
-    console.log('👤 [User Action] Clicked "Calculate WSJF & Rank Backlog" button');
+    console.log(`👤 [User Action] Clicked "${getActionButtonLabel()}" button`);
     console.log('📝 [Input Data]', {
       csvFilename: csvFile?.name,
       csvRowCount,
       selectedModel,
-      selectedOutputs,
+      selectedOutputs: selectedOutputsForModel,
       effortFieldName,
       maxScorePerFactor,
       normalizeScores,
-      topNItems,
+      topNItems: getTopNForModel(),
       projectId: activeProject.id,
     });
 
     try {
+      const artifactNamePrefix =
+        selectedModel === 'Value/Effort' ? 'Value-Effort' : selectedModel;
+
       // Call the agent with logging
       const result = await callAgentWithLogging(
-        'Prioritization (WSJF)',
+        `Prioritization (${selectedModel})`,
         'prioritization',
         {
           project_id: activeProject.id,
           project_name: activeProject.name,
           csv_row_count: csvRowCount,
-          selected_outputs: selectedOutputs,
+          selected_outputs: selectedOutputsForModel,
+          model: selectedModel,
         },
-        () => calculateWSJF({
+        () => calculatePrioritization({
           csv_content: csvContent,
           project_id: activeProject.id,
           project_name: activeProject.name,
+          model: selectedModel,
           artifact_name:
             (initiativeName && initiativeName.trim()) ||
-            `WSJF Prioritization - ${new Date().toLocaleDateString()}`,
+            `${artifactNamePrefix} Prioritization - ${new Date().toLocaleDateString()}`,
           initiative_name: initiativeName || undefined,
           default_effort_scale: defaultEffortScale || undefined,
           notes_context: notesContext || undefined,
+          selected_outputs: selectedOutputsForModel,
+          top_n_items: getTopNForModel(),
           effort_field_name: effortFieldName,
           max_score_per_factor: maxScorePerFactor,
           normalize_scores: normalizeScores,
-          top_n_items: topNItems,
-          selected_outputs: selectedOutputs,
+          rice_config: riceConfig,
+          moscow_config: moscowConfig,
+          value_effort_config: valueEffortConfig,
+          custom_config: customConfig,
         })
       );
 
-      console.log('✨ [Success] Received WSJF calculation results', { outputLength: result.output.length });
+      console.log(`✨ [Success] Received ${selectedModel} calculation results`, { outputLength: result.output.length });
       setCurrentOutput(result.output);
       setAdvisorOutput('');
       setActiveTab('current');
@@ -556,7 +581,7 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
 
       toast({
         title: 'Success',
-        description: 'WSJF scores calculated successfully',
+        description: `${selectedModel} prioritization calculated successfully`,
       });
     } catch (error: any) {
       console.error('💥 [Error Handler] Caught error:', error);
@@ -570,7 +595,7 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
       });
     } finally {
       setIsCalculating(false);
-      console.log('🏁 [Complete] WSJF calculation finished');
+      console.log(`🏁 [Complete] ${selectedModel} calculation finished`);
     }
   };
 
@@ -616,8 +641,8 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
       project_name: activeProject.name,
       source_session_table: 'project_artifacts',
       source_session_id: currentArtifactId,
-      artifact_type: 'WSJF Prioritization',
-      selected_outputs,
+      artifact_type: `${selectedModel} Prioritization`,
+      selected_outputs: getSelectedOutputsForModel(),
       context_artifacts: [],
     });
 
@@ -648,7 +673,27 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
   setCurrentArtifactId(session.id);
   setCurrentOutput(session.output_data ?? null);
   setAdvisorOutput(session.advisor_feedback ?? '');
-  setSelectedOutputs(getSessionSelectedOutputs(session) as OutputType[]);
+  const sessionModel = ((session.metadata ?? {}) as Record<string, unknown>).model;
+  const nextModel = PRIORITIZATION_MODELS.some(m => m.value === sessionModel)
+    ? (sessionModel as PrioritizationModel)
+    : 'WSJF';
+  setSelectedModel(nextModel);
+  const sessionSelectedOutputs = getSessionSelectedOutputs(session);
+  if (nextModel === 'WSJF') {
+    setSelectedOutputs(sessionSelectedOutputs as OutputType[]);
+  }
+  if (nextModel === 'RICE') {
+    setRiceConfig(prev => ({ ...prev, selectedOutputs: sessionSelectedOutputs as RICEOutputType[] }));
+  }
+  if (nextModel === 'MoSCoW') {
+    setMoscowConfig(prev => ({ ...prev, selectedOutputs: sessionSelectedOutputs as MoSCoWOutputType[] }));
+  }
+  if (nextModel === 'Value/Effort') {
+    setValueEffortConfig(prev => ({ ...prev, selectedOutputs: sessionSelectedOutputs as ValueEffortOutputType[] }));
+  }
+  if (nextModel === 'Custom') {
+    setCustomConfig(prev => ({ ...prev, selectedOutputs: sessionSelectedOutputs as CustomOutputType[] }));
+  }
   setInitiativeName(
     typeof input.initiative_name === 'string' ? input.initiative_name : ''
   );
