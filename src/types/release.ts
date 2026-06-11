@@ -1,3 +1,5 @@
+import type { OutputLanguage } from './output-language';
+
 export interface ReleaseSession {
   id: string;
   created_at: string;
@@ -37,6 +39,7 @@ export interface ReleaseGenerationInput {
   release_name?: string;
   target_audience?: string;
   known_risks?: string;
+  output_language?: OutputLanguage;
 }
 
 export interface ReleaseGenerationResult {

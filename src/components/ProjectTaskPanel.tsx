@@ -1,17 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, Plus } from 'lucide-react';
+import { ArrowRight, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, ExternalLink, Loader2, Plus, UploadCloud } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getArtifactRoute } from '@/lib/artifactRouting';
 import { supabaseFetch } from '@/lib/supabase';
 import { createProjectTask, fetchProjectTasks, updateProjectTask } from '@/lib/projectTasks';
+import { exportProjectTasksToNotion, fetchTaskNotionMappings } from '@/lib/notion';
 import type { ProjectArtifact } from '@/types/project-artifacts';
 import type { ActiveProject } from '@/types/project';
+import type { NotionSyncMapping } from '@/types/notion';
 import {
   PROJECT_TASK_MODULE_LABELS,
   PROJECT_TASK_MODULES,
@@ -33,6 +44,7 @@ interface ProjectTaskPanelProps {
   listMaxHeightClass?: string;
   readOnly?: boolean;
   headerAction?: React.ReactNode;
+  refreshKey?: number;
 }
 
 export function ProjectTaskPanel({
@@ -42,6 +54,7 @@ export function ProjectTaskPanel({
   listMaxHeightClass,
   readOnly = false,
   headerAction,
+  refreshKey = 0,
 }: ProjectTaskPanelProps) {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
@@ -52,20 +65,33 @@ export function ProjectTaskPanel({
   const [dueDate, setDueDate] = useState('');
   const [relatedModule, setRelatedModule] = useState<string>('');
   const [availableArtifacts, setAvailableArtifacts] = useState<ProjectArtifact[]>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState('');
-  const [selectedArtifactId, setSelectedArtifactId] = useState('');
+  const [notionMappings, setNotionMappings] = useState<Record<string, NotionSyncMapping>>({});
+  const [selectedArtifactByTaskId, setSelectedArtifactByTaskId] = useState<Record<string, string>>({});
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
+  const [exportingTaskIds, setExportingTaskIds] = useState<Set<string>>(new Set());
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!activeProject) {
       setTasks([]);
       setAvailableArtifacts([]);
+      setNotionMappings({});
+      setSelectedArtifactByTaskId({});
+      setIsCreateDialogOpen(false);
       return;
     }
 
     void loadTasks(activeProject.id);
     void loadArtifacts(activeProject.id);
+    void loadNotionMappings(activeProject.id);
+    setSelectedArtifactByTaskId({});
+    setIsCreateDialogOpen(false);
   }, [activeProject?.id]);
+
+  useEffect(() => {
+    if (!activeProject || refreshKey === 0) return;
+    void loadNotionMappings(activeProject.id);
+  }, [refreshKey, activeProject?.id]);
 
   const openTasks = useMemo(
     () => tasks.filter((task) => task.status === 'open'),
@@ -78,7 +104,6 @@ export function ProjectTaskPanel({
 
   const isCondensed = compact || expandableItems;
   const showComposer = !readOnly;
-  const showArtifactLinker = !readOnly;
   const visibleTasks = compact && !expandableItems ? openTasks.slice(0, 5) : tasks;
   const linkableArtifacts = useMemo(
     () =>
@@ -117,6 +142,47 @@ export function ProjectTaskPanel({
     }
   }
 
+  async function loadNotionMappings(projectId: string) {
+    try {
+      const rows = await fetchTaskNotionMappings(projectId);
+      setNotionMappings(rows);
+    } catch (error: any) {
+      toast.error('Failed to load Notion sync status', {
+        description: error?.message ?? 'Unable to fetch Notion mappings.',
+      });
+    }
+  }
+
+  async function handleExportTask(task: ProjectTask) {
+    if (!activeProject) return;
+
+    setExportingTaskIds((prev) => new Set(prev).add(task.id));
+    try {
+      const result = await exportProjectTasksToNotion(activeProject.id, [task.id]);
+      await loadNotionMappings(activeProject.id);
+
+      if (result.failures.length > 0) {
+        toast.error('Notion export failed', {
+          description: result.failures[0]?.error ?? 'Unable to export this task.',
+        });
+      } else {
+        toast.success('Task exported to Notion', {
+          description: result.updated > 0 ? 'Existing Notion task updated.' : 'New Notion task created.',
+        });
+      }
+    } catch (error: any) {
+      toast.error('Failed to export task to Notion', {
+        description: error?.message ?? 'Check the project Notion settings and try again.',
+      });
+    } finally {
+      setExportingTaskIds((prev) => {
+        const next = new Set(prev);
+        next.delete(task.id);
+        return next;
+      });
+    }
+  }
+
   async function handleCreateTask() {
     if (!activeProject) return;
 
@@ -141,6 +207,7 @@ export function ProjectTaskPanel({
       setTitle('');
       setDueDate('');
       setRelatedModule('');
+      setIsCreateDialogOpen(false);
       toast.success('Task created');
     } catch (error: any) {
       toast.error('Failed to create task', {
@@ -173,17 +240,18 @@ export function ProjectTaskPanel({
     }
   }
 
-  async function handleLinkExistingArtifact() {
-    if (!activeProject || !selectedTaskId || !selectedArtifactId) {
-      toast.error('Select a task and an artifact first');
+  async function handleLinkExistingArtifact(task: ProjectTask) {
+    const selectedArtifactId = selectedArtifactByTaskId[task.id];
+
+    if (!activeProject || !selectedArtifactId) {
+      toast.error('Select an artifact first');
       return;
     }
 
-    const task = tasks.find((row) => row.id === selectedTaskId);
     const artifact = linkableArtifacts.find((row) => row.id === selectedArtifactId);
 
-    if (!task || !artifact) {
-      toast.error('The selected task or artifact is no longer available');
+    if (!artifact) {
+      toast.error('The selected artifact is no longer available');
       return;
     }
 
@@ -206,8 +274,7 @@ export function ProjectTaskPanel({
       setTasks((prev) =>
         sortTasks(prev.map((row) => (row.id === task.id ? updated : row)))
       );
-      setSelectedTaskId('');
-      setSelectedArtifactId('');
+      setSelectedArtifactByTaskId((prev) => ({ ...prev, [task.id]: '' }));
       toast.success('Task linked to artifact');
     } catch (error: any) {
       toast.error('Failed to link artifact', {
@@ -234,6 +301,10 @@ export function ProjectTaskPanel({
         ? PROJECT_TASK_MODULE_LABELS[task.completed_artifact_type]
         : null;
     const isExpanded = expandedTaskIds.has(task.id);
+    const notionMapping = notionMappings[task.id];
+    const isExportingTask = exportingTaskIds.has(task.id);
+    const selectedArtifactId = selectedArtifactByTaskId[task.id] ?? '';
+    const canLinkArtifact = !readOnly && task.status === 'open' && linkableArtifacts.length > 0;
     const toggleExpanded = () => {
       setExpandedTaskIds((prev) => {
         const next = new Set(prev);
@@ -245,6 +316,100 @@ export function ProjectTaskPanel({
         return next;
       });
     };
+    const artifactLinker = canLinkArtifact ? (
+      <div className="rounded-lg border border-[#D7E3F8] bg-[#F8FBFF] p-3">
+        <div className="mb-3">
+          <p className="text-sm font-medium text-[#111827]">Link existing artifact</p>
+          <p className="text-xs text-[#6B7280]">
+            Mark this task complete by connecting it to a generated artifact.
+          </p>
+        </div>
+        <div className={`grid gap-3 ${isCondensed ? 'lg:grid-cols-1' : 'sm:grid-cols-[minmax(0,1fr)_160px]'}`}>
+          <div className="space-y-2">
+            <Label htmlFor={`${task.id}-link-artifact`}>Existing Artifact</Label>
+            <select
+              id={`${task.id}-link-artifact`}
+              value={selectedArtifactId}
+              onChange={(event) =>
+                setSelectedArtifactByTaskId((prev) => ({
+                  ...prev,
+                  [task.id]: event.target.value,
+                }))
+              }
+              disabled={isLinkingArtifact}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="">Select an artifact</option>
+              {linkableArtifacts.map((artifact) => (
+                <option key={artifact.id} value={artifact.id}>
+                  {getArtifactDisplayLabel(artifact)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-end">
+            <Button
+              variant="outline"
+              onClick={() => void handleLinkExistingArtifact(task)}
+              disabled={isLinkingArtifact || !selectedArtifactId}
+              className="w-full"
+            >
+              {isLinkingArtifact ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Linking...
+                </>
+              ) : (
+                'Link Artifact'
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    ) : null;
+    const actions = (
+      <TaskActionStack>
+        {task.status === 'completed' && linkedArtifactRoute ? (
+          <TaskActionButton onClick={() => navigate(linkedArtifactRoute)}>
+            View Artifact
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </TaskActionButton>
+        ) : null}
+        {task.related_module && task.status === 'open' ? (
+          <TaskActionButton onClick={() => navigate(TASK_MODULE_ROUTES[task.related_module!])}>
+            Open Module
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </TaskActionButton>
+        ) : null}
+        <TaskActionButton
+          variant={task.status === 'completed' ? 'outline' : 'default'}
+          onClick={() => void handleToggleTask(task)}
+        >
+          <CheckCircle2 className="mr-2 h-4 w-4" />
+          {task.status === 'completed' ? 'Reopen' : 'Complete'}
+        </TaskActionButton>
+        <TaskActionButton
+          onClick={() => void handleExportTask(task)}
+          disabled={isExportingTask}
+        >
+          {isExportingTask ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <UploadCloud className="mr-2 h-4 w-4" />
+          )}
+          {notionMapping?.last_sync_status === 'success' ? 'Update Notion' : 'Add to Notion'}
+        </TaskActionButton>
+        {notionMapping?.notion_url && notionMapping.last_sync_status === 'success' ? (
+          <Button asChild variant="outline" size="sm" className="h-9 w-full justify-between">
+            <a href={notionMapping.notion_url} target="_blank" rel="noreferrer">
+              Open Notion Task
+              <ExternalLink className="ml-2 h-4 w-4" />
+            </a>
+          </Button>
+        ) : null}
+      </TaskActionStack>
+    );
 
     if (expandableItems) {
       return (
@@ -271,6 +436,7 @@ export function ProjectTaskPanel({
                     {moduleLabel}
                   </Badge>
                 ) : null}
+                <NotionStatusBadge mapping={notionMapping} />
               </div>
               <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B7280]">
                 {dueLabel ? (
@@ -283,6 +449,9 @@ export function ProjectTaskPanel({
                 )}
                 {task.status === 'completed' && linkedArtifactLabel ? (
                   <span>Completed via: {linkedArtifactLabel}</span>
+                ) : null}
+                {notionMapping?.last_sync_status === 'success' ? (
+                  <span>Synced {new Date(notionMapping.last_synced_at).toLocaleDateString()}</span>
                 ) : null}
               </div>
             </div>
@@ -307,36 +476,8 @@ export function ProjectTaskPanel({
                   </p>
                 ) : null}
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {task.status === 'completed' && linkedArtifactRoute ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => navigate(linkedArtifactRoute)}
-                    >
-                      View Artifact
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  ) : null}
-                  {task.related_module && task.status === 'open' ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => navigate(TASK_MODULE_ROUTES[task.related_module!])}
-                    >
-                      Open Module
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  ) : null}
-                  <Button
-                    size="sm"
-                    variant={task.status === 'completed' ? 'outline' : 'default'}
-                    onClick={() => void handleToggleTask(task)}
-                  >
-                    <CheckCircle2 className="mr-2 h-4 w-4" />
-                    {task.status === 'completed' ? 'Reopen' : 'Complete'}
-                  </Button>
-                </div>
+                {artifactLinker}
+                {actions}
               </div>
             </div>
           ) : null}
@@ -349,8 +490,8 @@ export function ProjectTaskPanel({
         key={task.id}
         className="rounded-lg border border-[#E5E7EB] bg-white p-4"
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-2">
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px] md:items-start">
+          <div className="min-w-0 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <p className={`text-sm font-medium ${task.status === 'completed' ? 'text-[#6B7280] line-through' : 'text-[#111827]'}`}>
                 {task.title}
@@ -363,6 +504,7 @@ export function ProjectTaskPanel({
                   {moduleLabel}
                 </Badge>
               ) : null}
+              <NotionStatusBadge mapping={notionMapping} />
             </div>
 
             <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B7280]">
@@ -381,39 +523,15 @@ export function ProjectTaskPanel({
                   Completed via: {linkedArtifactLabel}
                 </span>
               ) : null}
+              {notionMapping?.last_sync_status === 'success' ? (
+                <span>Synced {new Date(notionMapping.last_synced_at).toLocaleDateString()}</span>
+              ) : null}
             </div>
+
+            {artifactLinker}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {task.status === 'completed' && linkedArtifactRoute ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate(linkedArtifactRoute)}
-              >
-                View Artifact
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            ) : null}
-            {task.related_module && task.status === 'open' ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate(TASK_MODULE_ROUTES[task.related_module!])}
-              >
-                Open Module
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            ) : null}
-            <Button
-              size="sm"
-              variant={task.status === 'completed' ? 'outline' : 'default'}
-              onClick={() => void handleToggleTask(task)}
-            >
-              <CheckCircle2 className="mr-2 h-4 w-4" />
-              {task.status === 'completed' ? 'Reopen' : 'Complete'}
-            </Button>
-          </div>
+          {actions}
         </div>
       </div>
     );
@@ -437,6 +555,101 @@ export function ProjectTaskPanel({
           <div className="flex items-center gap-2 text-xs text-[#6B7280]">
             <Badge variant="outline">{openTasks.length} open</Badge>
             {!compact || expandableItems ? <Badge variant="secondary">{completedTasks.length} completed</Badge> : null}
+            {showComposer ? (
+              <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    size="sm"
+                    disabled={!activeProject}
+                    className="ml-1 gap-2"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add new task
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-xl">
+                  <DialogHeader>
+                    <DialogTitle>Add new task</DialogTitle>
+                    <DialogDescription>
+                      Capture the next piece of work and optionally tie it to a Product Workbench module.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor={compact ? 'dashboard-task-title' : 'project-dashboard-task-title'}>
+                        Task or note
+                      </Label>
+                      <Input
+                        id={compact ? 'dashboard-task-title' : 'project-dashboard-task-title'}
+                        placeholder="Capture the next thing to move forward"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        disabled={isSubmitting}
+                      />
+                    </div>
+
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor={compact ? 'dashboard-task-due' : 'project-dashboard-task-due'}>
+                          Due Date
+                        </Label>
+                        <Input
+                          id={compact ? 'dashboard-task-due' : 'project-dashboard-task-due'}
+                          type="date"
+                          value={dueDate}
+                          onChange={(e) => setDueDate(e.target.value)}
+                          disabled={isSubmitting}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor={compact ? 'dashboard-task-module' : 'project-dashboard-task-module'}>
+                          Related Module
+                        </Label>
+                        <select
+                          id={compact ? 'dashboard-task-module' : 'project-dashboard-task-module'}
+                          value={relatedModule}
+                          onChange={(e) => setRelatedModule(e.target.value)}
+                          disabled={isSubmitting}
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="">None</option>
+                          {PROJECT_TASK_MODULES.map((module) => (
+                            <option key={module} value={module}>
+                              {PROJECT_TASK_MODULE_LABELS[module]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => setIsCreateDialogOpen(false)}
+                      disabled={isSubmitting}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => void handleCreateTask()}
+                      disabled={isSubmitting || !title.trim()}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Adding...
+                        </>
+                      ) : (
+                        'Add task'
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            ) : null}
             {headerAction}
           </div>
         </div>
@@ -449,123 +662,6 @@ export function ProjectTaskPanel({
           </div>
         ) : (
           <>
-            {showComposer ? (
-              <div className={`grid gap-3 ${isCondensed ? 'grid-cols-[minmax(0,1fr)_44px] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px]' : 'lg:grid-cols-[minmax(0,1.6fr)_180px_240px_auto]'}`}>
-                <div className={`space-y-2 ${isCondensed ? 'sm:col-span-2' : ''}`}>
-                  <Label htmlFor={compact ? 'dashboard-task-title' : 'project-dashboard-task-title'}>
-                    Task or note
-                  </Label>
-                  <Input
-                    id={compact ? 'dashboard-task-title' : 'project-dashboard-task-title'}
-                    placeholder="Capture the next thing to move forward"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    disabled={isSubmitting}
-                  />
-                </div>
-
-                <div className={`flex items-end ${isCondensed ? 'sm:col-start-3' : ''}`}>
-                  <Button
-                    onClick={() => void handleCreateTask()}
-                    disabled={isSubmitting || !title.trim()}
-                    className={isCondensed ? 'h-10 w-10 p-0' : 'w-full'}
-                    aria-label="Add task"
-                    title="Add task"
-                  >
-                    {isCondensed ? <Plus className="h-4 w-4" /> : 'Add Task'}
-                  </Button>
-                </div>
-
-                <div className={`space-y-2 ${isCondensed ? 'col-span-2 sm:col-span-1' : ''}`}>
-                  <Label htmlFor={compact ? 'dashboard-task-due' : 'project-dashboard-task-due'}>
-                    Due Date
-                  </Label>
-                  <Input
-                    id={compact ? 'dashboard-task-due' : 'project-dashboard-task-due'}
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    disabled={isSubmitting}
-                  />
-                </div>
-
-                <div className={`space-y-2 ${isCondensed ? 'col-span-2 sm:col-span-2' : ''}`}>
-                  <Label htmlFor={compact ? 'dashboard-task-module' : 'project-dashboard-task-module'}>
-                    Related Module
-                  </Label>
-                  <select
-                    id={compact ? 'dashboard-task-module' : 'project-dashboard-task-module'}
-                    value={relatedModule}
-                    onChange={(e) => setRelatedModule(e.target.value)}
-                    disabled={isSubmitting}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="">None</option>
-                    {PROJECT_TASK_MODULES.map((module) => (
-                      <option key={module} value={module}>
-                        {PROJECT_TASK_MODULE_LABELS[module]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            ) : null}
-
-            {showArtifactLinker && openTasks.length > 0 && linkableArtifacts.length > 0 ? (
-              <div className={`grid gap-3 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-4 ${isCondensed ? 'lg:grid-cols-1' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto]'}`}>
-                <div className="space-y-2">
-                  <Label htmlFor={compact ? 'dashboard-link-task' : 'project-dashboard-link-task'}>
-                    Link Existing Task
-                  </Label>
-                  <select
-                    id={compact ? 'dashboard-link-task' : 'project-dashboard-link-task'}
-                    value={selectedTaskId}
-                    onChange={(e) => setSelectedTaskId(e.target.value)}
-                    disabled={isLinkingArtifact}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="">Select an open task</option>
-                    {openTasks.map((task) => (
-                      <option key={task.id} value={task.id}>
-                        {task.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor={compact ? 'dashboard-link-artifact' : 'project-dashboard-link-artifact'}>
-                    Existing Artifact
-                  </Label>
-                  <select
-                    id={compact ? 'dashboard-link-artifact' : 'project-dashboard-link-artifact'}
-                    value={selectedArtifactId}
-                    onChange={(e) => setSelectedArtifactId(e.target.value)}
-                    disabled={isLinkingArtifact}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="">Select an artifact</option>
-                    {linkableArtifacts.map((artifact) => (
-                      <option key={artifact.id} value={artifact.id}>
-                        {getArtifactDisplayLabel(artifact)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex items-end">
-                  <Button
-                    variant="outline"
-                    onClick={() => void handleLinkExistingArtifact()}
-                    disabled={isLinkingArtifact || !selectedTaskId || !selectedArtifactId}
-                    className="w-full"
-                  >
-                    Link Artifact
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-
             {isLoading ? (
               <p className="text-sm text-[#6B7280]">Loading tasks…</p>
             ) : visibleTasks.length === 0 ? (
@@ -625,4 +721,60 @@ function getArtifactDisplayLabel(artifact: ProjectArtifact): string {
   const name = artifact.artifact_name || 'Untitled';
   const createdAt = new Date(artifact.created_at).toLocaleDateString();
   return `${prefix}: ${name} (${createdAt})`;
+}
+
+function NotionStatusBadge({ mapping }: { mapping?: NotionSyncMapping }) {
+  if (!mapping) {
+    return (
+      <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-600">
+        Not exported
+      </Badge>
+    );
+  }
+
+  if (mapping.last_sync_status === 'failed') {
+    return (
+      <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
+        Notion failed
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+      Exported to Notion
+    </Badge>
+  );
+}
+
+function TaskActionStack({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex w-full flex-col gap-2 md:w-[180px]">
+      {children}
+    </div>
+  );
+}
+
+function TaskActionButton({
+  children,
+  variant = 'outline',
+  disabled,
+  onClick,
+}: {
+  children: React.ReactNode;
+  variant?: 'default' | 'outline';
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant={variant}
+      disabled={disabled}
+      onClick={onClick}
+      className="h-9 w-full justify-between"
+    >
+      {children}
+    </Button>
+  );
 }

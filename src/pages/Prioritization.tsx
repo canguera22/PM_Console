@@ -23,6 +23,8 @@ import Papa from 'papaparse';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
+import { ArtifactActions } from '@/components/ArtifactActions';
+import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 import {
   PRIORITIZATION_MODELS,
   OUTPUT_TYPES,
@@ -73,6 +75,7 @@ export default function Prioritization() {
   const [initiativeName, setInitiativeName] = useState('');
   const [defaultEffortScale, setDefaultEffortScale] = useState('');
   const [notesContext, setNotesContext] = useState('');
+  const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('english');
 
   // Column collapse state (match Doc / Release / Meeting)
   const [isInputsCollapsed, setIsInputsCollapsed] = useState(false);
@@ -523,6 +526,7 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
       normalizeScores,
       topNItems: getTopNForModel(),
       projectId: activeProject.id,
+      outputLanguage,
     });
 
     try {
@@ -539,6 +543,7 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
           csv_row_count: csvRowCount,
           selected_outputs: selectedOutputsForModel,
           model: selectedModel,
+          output_language: outputLanguage,
         },
         () => calculatePrioritization({
           csv_content: csvContent,
@@ -556,6 +561,7 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
           effort_field_name: effortFieldName,
           max_score_per_factor: maxScorePerFactor,
           normalize_scores: normalizeScores,
+          output_language: outputLanguage,
           rice_config: riceConfig,
           moscow_config: moscowConfig,
           value_effort_config: valueEffortConfig,
@@ -929,6 +935,27 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                     onChange={(e) => setNotesContext(e.target.value)}
                     rows={3}
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="prioritization-output-language" className="text-[13px] font-medium text-[#6B7280]">
+                    Output Language
+                  </Label>
+                  <Select
+                    value={outputLanguage}
+                    onValueChange={(value) => setOutputLanguage(value as OutputLanguage)}
+                  >
+                    <SelectTrigger id="prioritization-output-language">
+                      <SelectValue placeholder="Select language" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {OUTPUT_LANGUAGE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </CardContent>
@@ -1601,7 +1628,7 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                 <TabsContent value="current" className="mt-4 space-y-4">
                   {currentOutput ? (
                     <>
-                      <div className="flex justify-end">
+                      <div className="flex justify-end gap-2">
                         <Button
                           variant="outline"
                           size="sm"
@@ -1620,6 +1647,12 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                             </>
                           )}
                         </Button>
+                        <ArtifactActions
+                          title={`${selectedModel} Prioritization`}
+                          content={currentOutput}
+                          projectName={activeProject?.name}
+                          moduleLabel="Backlog Prioritization"
+                        />
                       </div>
 
                       <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">

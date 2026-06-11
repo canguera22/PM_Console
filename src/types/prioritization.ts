@@ -1,3 +1,5 @@
+import type { OutputLanguage } from './output-language';
+
 // ===============================
 // Core Types
 // ===============================
@@ -129,6 +131,7 @@ export interface WSJFCalculationInput {
   normalize_scores: boolean;
   top_n_items: number;
   selected_outputs: string[];
+  output_language?: OutputLanguage;
 }
 
 export interface WSJFCalculationResult {
@@ -155,6 +158,7 @@ export interface PrioritizationCalculationInput {
   moscow_config?: MoSCoWConfig;
   value_effort_config?: ValueEffortConfig;
   custom_config?: CustomScoringConfig;
+  output_language?: OutputLanguage;
 }
 
 export interface PrioritizationCalculationResult {

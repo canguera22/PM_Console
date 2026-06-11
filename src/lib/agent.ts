@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { getFunctionErrorMessage } from './function-errors';
 import type { ExtractedActionItem } from '@/types/meeting';
+import type { OutputLanguage } from '@/types/output-language';
 
 export interface MeetingAnalysisInput {
   // ✅ REQUIRED: UUID string so Edge Function can store artifact under the correct project
@@ -14,6 +15,7 @@ export interface MeetingAnalysisInput {
   project_name?: string;
   participants?: string;
   artifact_name?: string;
+  output_language?: OutputLanguage;
 }
 
 export interface MeetingAnalysisResult {

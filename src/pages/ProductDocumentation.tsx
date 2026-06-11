@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Badge } from '@/components/ui/badge';
@@ -22,6 +23,8 @@ import { callPMAdvisorAgent, fetchContextArtifacts, saveAdvisorReview } from '@/
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
+import { ArtifactActions } from '@/components/ArtifactActions';
+import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 import Papa from 'papaparse';
 import { supabase } from '@/lib/supabase';
 
@@ -435,6 +438,7 @@ const handleDrop = useCallback((e: React.DragEvent) => {
   });
 
   const [selectedOutputs, setSelectedOutputs] = useState<OutputKey[]>([]);
+  const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('english');
   const csvAllowed =
   selectedOutputs.length === 1 &&
   selectedOutputs.includes(OUTPUT_KEYS.USER_STORIES);
@@ -742,7 +746,8 @@ const switchToCsvMode = () => {
   project_name: activeProject.name,
   artifact_name: formData.input_name.trim(),
   input_mode: inputMode,
-  selected_outputs: normalizedOutputs,   
+  selected_outputs: normalizedOutputs,
+  output_language: outputLanguage,
 };
 
 const payload =
@@ -785,6 +790,7 @@ const payload =
       problem_statement: formData.problem_statement.substring(0, 100) + '...',
       selectedOutputs,
       projectId: activeProject.id,
+      outputLanguage,
     });
 
 console.log('🧪 payload.selected_outputs', payload.selected_outputs);
@@ -1225,6 +1231,27 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                               handleInputChange('input_name', e.target.value)
                             }
                           />
+                        </div>
+
+                        <div className="mb-6">
+                          <Label htmlFor="output_language" className="text-[13px] font-medium text-[#6B7280]">
+                            Output Language
+                          </Label>
+                          <Select
+                            value={outputLanguage}
+                            onValueChange={(value) => setOutputLanguage(value as OutputLanguage)}
+                          >
+                            <SelectTrigger id="output_language" className="mt-2">
+                              <SelectValue placeholder="Select language" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {OUTPUT_LANGUAGE_OPTIONS.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
 
                         {/* MANUAL MODE */}
@@ -1686,6 +1713,12 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
                               <Copy className="mr-2 h-4 w-4" />
                               Copy All
                             </Button>
+                            <ArtifactActions
+                              title={formData.input_name || activeProject?.name || 'Product Documentation'}
+                              content={buildCombinedOutput(outputByType)}
+                              projectName={activeProject?.name}
+                              moduleLabel="Product Documentation"
+                            />
                           </>
                         ) : (
                           <>

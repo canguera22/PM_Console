@@ -187,7 +187,12 @@ serve(async (req) => {
       project_id,
       project_name,
       artifact_name,
+      output_language,
     } = payload;
+    const normalizedOutputLanguage =
+      output_language === 'spanish' ? 'spanish' : 'english';
+    const outputLanguageLabel =
+      normalizedOutputLanguage === 'spanish' ? 'Spanish' : 'English';
 
     /* ---------------- Validation ---------------- */
 
@@ -417,6 +422,13 @@ Only include what materially supports these outputs.
 `;
     }
 
+    userPrompt += `
+OUTPUT LANGUAGE:
+- Write all user-facing markdown output in ${outputLanguageLabel}.
+- Keep CSV column names, product names, acronyms, prioritization model names, markdown syntax, and direct source quotes unchanged.
+- Preserve the exact final heading "## Conflicts with Context Documents".
+`;
+
     if (
       selected_outputs.includes('Top N Items Summary') &&
       top_n_items
@@ -502,6 +514,7 @@ REQUIRED FINAL SECTION:
           schema_version: 1,
           input_mode: 'csv',
           selected_outputs,
+          output_language: normalizedOutputLanguage,
           input: {
             model,
             initiative_name,
@@ -521,6 +534,7 @@ REQUIRED FINAL SECTION:
         metadata: {
           input_schema_version: 1,
           model,
+          output_language: normalizedOutputLanguage,
           tokens_used: completion.usage?.total_tokens,
           duration_ms: durationMs,
           context_documents_used: projectDocsContext ? true : false,

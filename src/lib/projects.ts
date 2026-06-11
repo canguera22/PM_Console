@@ -68,6 +68,32 @@ export async function createProject(
   return project as Project;
 }
 
+export async function updateProject(
+  id: string,
+  updates: {
+    name?: string;
+    description?: string | null;
+    status?: 'active' | 'archived' | 'deleted';
+  }
+): Promise<Project> {
+  const { data, error } = await supabase
+    .from('projects')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    throw new Error('Failed to update project');
+  }
+
+  return data as Project;
+}
+
 /**
  * Get a project by ID (UUID string)
  */

@@ -405,6 +405,7 @@ serve(async (req) => {
       participants,
       project_id,
       artifact_name,
+      output_language,
     } = await req.json();
 
     console.log('📋 [Payload]', {
@@ -418,6 +419,10 @@ serve(async (req) => {
 
     const normalizedInputMode =
       input_mode === 'notes_cleanup' ? 'notes_cleanup' : 'transcript';
+    const normalizedOutputLanguage =
+      output_language === 'spanish' ? 'spanish' : 'english';
+    const outputLanguageLabel =
+      normalizedOutputLanguage === 'spanish' ? 'Spanish' : 'English';
 
     // Validation
     if (!meeting_transcript) {
@@ -555,6 +560,7 @@ serve(async (req) => {
     if (participants) {
       userMessage += `\nParticipants: ${participants}`;
     }
+    userMessage += `\n\nOUTPUT LANGUAGE:\n- Write all user-facing markdown output in ${outputLanguageLabel}.\n- Write action_items title, description, confidence explanation fields, and context_validation in ${outputLanguageLabel}.\n- Keep JSON property names, IDs, related_module values, markdown syntax, product names, and acronyms unchanged.\n- Keep direct source quotes in their original language when used as evidence.`;
     userMessage += `\n\nREQUIRED FINAL SECTION:\n- End the output with exactly this heading: "## Conflicts with Context Documents"\n- In that section, compare your output against uploaded project documents and prior project artifacts provided above.\n- If none conflict, write: "No conflicts identified".`;
 
     userMessage += `\n\nReturn ONLY valid JSON matching this shape:
@@ -652,6 +658,7 @@ Rules for action_items:
         input_data: {
           schema_version: 2,
           input_mode: normalizedInputMode,
+          output_language: normalizedOutputLanguage,
           input: {
             source_text: meeting_transcript,
             meeting_transcript:
@@ -666,6 +673,7 @@ Rules for action_items:
         metadata: {
           input_schema_version: 2,
           input_mode: normalizedInputMode,
+          output_language: normalizedOutputLanguage,
           meeting_type,
           participants,
           action_items: actionItems,

@@ -272,6 +272,13 @@ export function AppSidebar() {
 
             <NavSection label="Project" collapsed={isCollapsed}>
               <SidebarButton
+                icon={FolderOpen}
+                label="Project Details"
+                active={location.pathname === '/project'}
+                collapsed={isCollapsed}
+                onClick={() => navigateTo('/project')}
+              />
+              <SidebarButton
                 icon={BookOpen}
                 label="Context Docs"
                 active={location.pathname === '/context'}

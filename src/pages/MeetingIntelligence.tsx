@@ -20,9 +20,11 @@ import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { useSearchParams } from 'react-router-dom';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
+import { ArtifactActions } from '@/components/ArtifactActions';
 import { createProjectTask } from '@/lib/projectTasks';
 import { extractActionItemsFromMarkdown } from '@/lib/actionItems';
 import { PROJECT_TASK_MODULE_LABELS, ProjectTaskModule } from '@/types/project-tasks';
+import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 
 
 export default function MeetingIntelligence() {
@@ -39,6 +41,7 @@ export default function MeetingIntelligence() {
   const [meetingType, setMeetingType] = useState<string>('');
   const [projectName, setProjectName] = useState('');
   const [participants, setParticipants] = useState('');
+  const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('english');
 
   // Analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -216,6 +219,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       projectName: effectiveProjectName,
       participants,
       projectId: activeProject.id,
+      outputLanguage,
     });
 
     try {
@@ -232,6 +236,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
           input_mode: inputMode,
           meeting_type: meetingType || undefined,
           participants: participants || undefined,
+          output_language: outputLanguage,
           persist_artifact: true,
         },
         () =>
@@ -243,6 +248,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
             meeting_type: meetingType || undefined,
             participants: participants || undefined,
             artifact_name: artifactName,
+            output_language: outputLanguage,
           })
       );
 
@@ -637,6 +643,27 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                           onChange={(e) => setProjectName(e.target.value)}
                         />
                       </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="output-language" className="text-[13px] font-medium text-[#6B7280]">
+                          Output Language
+                        </Label>
+                        <Select
+                          value={outputLanguage}
+                          onValueChange={(value) => setOutputLanguage(value as OutputLanguage)}
+                        >
+                          <SelectTrigger id="output-language">
+                            <SelectValue placeholder="Select language" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {OUTPUT_LANGUAGE_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
 
                     <div className="space-y-2">
@@ -719,14 +746,20 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                               Edit
                             </Button>
 
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={handleCopyToClipboard}
-                            >
-                              Copy to Clipboard
-                            </Button>
-                          </div>
+	                            <Button
+	                              variant="outline"
+	                              size="sm"
+	                              onClick={handleCopyToClipboard}
+	                            >
+	                              Copy to Clipboard
+	                            </Button>
+                              <ArtifactActions
+                                title={projectName || activeProject?.name || 'Project Notes'}
+                                content={currentOutput}
+                                projectName={activeProject?.name}
+                                moduleLabel="Project Notes"
+                              />
+	                          </div>
                         ) : (
                           /* EDIT MODE */
                           <div className="flex items-center justify-between">

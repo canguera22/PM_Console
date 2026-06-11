@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { getFunctionErrorMessage } from './function-errors';
+import type { OutputLanguage } from '@/types/output-language';
 
 export interface DocumentationInput {
   problem_statement: string;
@@ -16,6 +17,7 @@ export interface DocumentationInput {
   target_timeline?: string;
   epic_impact?: string;
   selected_outputs: string[];
+  output_language?: OutputLanguage;
 }
 
 export interface DocumentationResult {

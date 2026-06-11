@@ -15,6 +15,7 @@ import {
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { useNavigate } from 'react-router-dom';
 import { PageShell } from '@/components/PageShell';
+import { ArtifactActions } from '@/components/ArtifactActions';
 
 
 
@@ -454,6 +455,7 @@ const handleStatClick = (type: string) => {
                         key={artifact.id}
                         artifact={artifact}
                         config={ARTIFACT_TYPE_CONFIG[artifact.artifact_type]}
+                        projectName={activeProject?.name}
                         onClick={() => {
                           const route = MODULE_ROUTE_BY_TYPE[artifact.artifact_type];
                           if (!route) return;
@@ -556,9 +558,10 @@ function StatCard({
 }
 
 // Artifact Card Component
-function ArtifactCard({ artifact, config, onClick }: {
+function ArtifactCard({ artifact, config, projectName, onClick }: {
   artifact: ProjectArtifact;
   config: any;
+  projectName?: string | null;
   onClick: () => void;
 }) {
   const Icon = config?.icon || FileText;
@@ -592,9 +595,18 @@ function ArtifactCard({ artifact, config, onClick }: {
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2 text-xs font-semibold text-blue-700">
-          Open
-          <ChevronRight className="w-4 h-4 text-slate-400 transition-all group-hover:translate-x-0.5 group-hover:text-blue-600" />
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <ArtifactActions
+            title={getArtifactDisplayName(artifact)}
+            content={artifact.output_data}
+            projectName={projectName ?? artifact.project_name}
+            moduleLabel={config?.label ?? artifact.artifact_type}
+            createdAt={artifact.created_at}
+          />
+          <span className="flex items-center gap-2 text-xs font-semibold text-blue-700">
+            Open
+            <ChevronRight className="w-4 h-4 text-slate-400 transition-all group-hover:translate-x-0.5 group-hover:text-blue-600" />
+          </span>
         </div>
       </div>
     </button>

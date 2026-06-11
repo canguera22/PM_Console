@@ -677,7 +677,12 @@ serve(async (req) => {
       project_id,
       project_name,
       artifact_name,
+      output_language,
     } = await req.json();
+    const normalizedOutputLanguage =
+      output_language === 'spanish' ? 'spanish' : 'english';
+    const outputLanguageLabel =
+      normalizedOutputLanguage === 'spanish' ? 'Spanish' : 'English';
 
     // ---------------------------
     // Validation
@@ -756,6 +761,7 @@ serve(async (req) => {
     if (target_audience) userMessage += `Target Audience: ${target_audience}\n`;
     if (known_risks) userMessage += `Known Risks: ${known_risks}\n`;
     userMessage += `\nSelected outputs (exact):\n${selectedOutputs.map((o) => `- ${o}`).join('\n')}\n`;
+    userMessage += `\nOUTPUT LANGUAGE:\n- Write each markdown value in ${outputLanguageLabel}.\n- Keep JSON keys, selected output names, markdown syntax, product names, acronyms, CSV field names, and direct source quotes unchanged.\n- Preserve the exact final heading "## Conflicts with Context Documents" in every markdown value.\n`;
     userMessage += `
 Return JSON ONLY in this shape:
 {
@@ -863,6 +869,7 @@ Rules:
             schema_version: 1,
             input_mode: 'csv',
             selected_outputs: selectedOutputs,
+            output_language: normalizedOutputLanguage,
             input: {
               release_name,
               target_audience,
@@ -872,6 +879,7 @@ Rules:
           output_data: output,
           metadata: {
             input_schema_version: 1,
+            output_language: normalizedOutputLanguage,
             tokens_used: data.usage?.total_tokens,
             duration_ms: duration,
             output_sections: sections,

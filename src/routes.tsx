@@ -10,6 +10,7 @@ import ReleaseCommunications from "./pages/ReleaseCommunications";
 import Prioritization from "./pages/Prioritization";
 import Tasks from "./pages/Tasks";
 import ContextDocs from "./pages/ContextDocs";
+import ProjectDetails from "./pages/ProjectDetails";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import NotFound from "./pages/NotFound";
@@ -45,6 +46,10 @@ const routes = [
           {
             path: "context",
             element: <ContextDocs />,
+          },
+          {
+            path: "project",
+            element: <ProjectDetails />,
           },
           {
             path: "meetings",

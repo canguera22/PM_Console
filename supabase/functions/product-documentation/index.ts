@@ -463,6 +463,10 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
+    const normalizedOutputLanguage =
+      body?.output_language === 'spanish' ? 'spanish' : 'english';
+    const outputLanguageLabel =
+      normalizedOutputLanguage === 'spanish' ? 'Spanish' : 'English';
     // 🔁 Normalize frontend payload shape
     if (body.input) {
       Object.assign(body, body.input);
@@ -829,6 +833,10 @@ userMessage += `- Do NOT merge outputs.\n\n`;
 userMessage += `- Every output MUST end with a final section headed exactly: "## Conflicts with Context Documents".\n`;
 userMessage += `- In that final section, verify the output against uploaded project context documents and prior generated project artifacts provided above.\n`;
 userMessage += `- If no conflicts exist, explicitly write: "No conflicts identified".\n\n`;
+userMessage += `OUTPUT LANGUAGE:\n`;
+userMessage += `- Write all user-facing artifact content in ${outputLanguageLabel}.\n`;
+userMessage += `- Keep OUTPUT marker lines, output names, JSON/internal keys, markdown syntax, product names, acronyms, Jira field names, and direct source quotes unchanged.\n`;
+userMessage += `- Preserve the exact heading "## Conflicts with Context Documents" so the app can detect the validation section.\n\n`;
 
 for (const out of outputsToGenerate) {
   const spec = OUTPUT_SPECS[out] ?? null;
@@ -924,6 +932,7 @@ userMessage += `\nOutput in Markdown optimized for Jira/Confluence copy/paste.\n
           schema_version: 1,
           input_mode: hasCsvInput ? 'jira_csv' : 'manual',
           selected_outputs,
+          output_language: normalizedOutputLanguage,
           input: {
             problem_statement,
             target_user_persona,
@@ -951,6 +960,7 @@ userMessage += `\nOutput in Markdown optimized for Jira/Confluence copy/paste.\n
         metadata: {
           input_schema_version: 1,
           selected_outputs,
+          output_language: normalizedOutputLanguage,
           missing_inputs: missingInputs,
           tokens_used: data.usage?.total_tokens,
           duration_ms: duration,

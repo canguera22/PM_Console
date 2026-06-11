@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -38,6 +39,8 @@ import { ErrorDisplay } from '@/components/ErrorDisplay';
 ///import { fetchContextArtifacts } from '@/lib/context-artifacts';
 import { callPMAdvisorAgent } from '@/lib/pm-advisor';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
+import { ArtifactActions } from '@/components/ArtifactActions';
+import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 
 
 // project_artifacts row shape (based on your schema)
@@ -231,6 +234,7 @@ export default function ReleaseCommunications() {
   const [releaseName, setReleaseName] = useState('');
   const [targetAudience, setTargetAudience] = useState('');
   const [knownRisks, setKnownRisks] = useState('');
+  const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('english');
   const [selectedOutputs, setSelectedOutputs] = useState<OutputType[]>([]);
 
   // Generation state
@@ -497,6 +501,7 @@ export default function ReleaseCommunications() {
         csv_filename: csvFile?.name ?? null,
         csv_row_count: parsedCsv?.rowCount ?? null,
         selected_outputs: selectedOutputs,
+        output_language: outputLanguage,
         release_name: releaseName || null,
         target_audience: targetAudience || null,
         has_known_risks: !!knownRisks,
@@ -512,6 +517,7 @@ export default function ReleaseCommunications() {
       release_name: releaseName || undefined,
       target_audience: targetAudience || undefined,
       known_risks: knownRisks || undefined,
+      output_language: outputLanguage,
       project_id: activeProject.id,
       project_name: activeProject.name,
       artifact_name: artifactName,
@@ -989,6 +995,27 @@ setActiveSectionId(sections[0]?.id ?? null);
                             rows={3}
                           />
                         </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="release-output-language" className="text-sm font-medium text-[#111827]">
+                            Output Language
+                          </Label>
+                          <Select
+                            value={outputLanguage}
+                            onValueChange={(value) => setOutputLanguage(value as OutputLanguage)}
+                          >
+                            <SelectTrigger id="release-output-language">
+                              <SelectValue placeholder="Select language" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {OUTPUT_LANGUAGE_OPTIONS.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -1201,6 +1228,12 @@ setActiveSectionId(sections[0]?.id ?? null);
                                           <Copy className="mr-2 h-4 w-4" />
                                           Copy to Clipboard
                                         </Button>
+                                        <ArtifactActions
+                                          title={sec.title || activeProject?.name || 'Release Communications'}
+                                          content={sec.content}
+                                          projectName={activeProject?.name}
+                                          moduleLabel="Release Communications"
+                                        />
                                       </>
                                     ) : (
                                       <>
@@ -1292,6 +1325,12 @@ setActiveSectionId(sections[0]?.id ?? null);
                                   <Copy className="mr-2 h-4 w-4" />
                                   Copy to Clipboard
                                 </Button>
+                                <ArtifactActions
+                                  title={outputSections[0]?.title || activeProject?.name || 'Release Communications'}
+                                  content={outputSections[0]?.content ?? currentOutput}
+                                  projectName={activeProject?.name}
+                                  moduleLabel="Release Communications"
+                                />
                               </>
                             ) : (
                               <>
