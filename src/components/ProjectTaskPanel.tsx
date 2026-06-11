@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, ExternalLink, Loader2, Plus, UploadCloud } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  CalendarDays,
+  CheckCircle2,
+  ChevronDown,
+  ClipboardList,
+  ExternalLink,
+  Loader2,
+  Plus,
+  UploadCloud,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +27,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { getArtifactRoute } from '@/lib/artifactRouting';
 import { supabaseFetch } from '@/lib/supabase';
 import { createProjectTask, fetchProjectTasks, updateProjectTask } from '@/lib/projectTasks';
@@ -29,6 +41,8 @@ import {
   ProjectTask,
   ProjectTaskModule,
 } from '@/types/project-tasks';
+
+export type TaskViewMode = 'list' | 'kanban' | 'calendar';
 
 const TASK_MODULE_ROUTES: Record<ProjectTaskModule, string> = {
   meeting_intelligence: '/meetings',
@@ -45,6 +59,8 @@ interface ProjectTaskPanelProps {
   readOnly?: boolean;
   headerAction?: React.ReactNode;
   refreshKey?: number;
+  viewMode?: TaskViewMode;
+  onViewModeChange?: (viewMode: TaskViewMode) => void;
 }
 
 export function ProjectTaskPanel({
@@ -55,6 +71,8 @@ export function ProjectTaskPanel({
   readOnly = false,
   headerAction,
   refreshKey = 0,
+  viewMode,
+  onViewModeChange,
 }: ProjectTaskPanelProps) {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
@@ -70,6 +88,11 @@ export function ProjectTaskPanel({
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
   const [exportingTaskIds, setExportingTaskIds] = useState<Set<string>>(new Set());
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [internalTaskViewMode, setInternalTaskViewMode] = useState<TaskViewMode>('list');
+  const [selectedTaskDetailId, setSelectedTaskDetailId] = useState<string | null>(null);
+  const [calendarAnchorDate, setCalendarAnchorDate] = useState(() => new Date());
+  const [descriptionDrafts, setDescriptionDrafts] = useState<Record<string, string>>({});
+  const [savingDescriptionIds, setSavingDescriptionIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!activeProject) {
@@ -77,7 +100,9 @@ export function ProjectTaskPanel({
       setAvailableArtifacts([]);
       setNotionMappings({});
       setSelectedArtifactByTaskId({});
+      setDescriptionDrafts({});
       setIsCreateDialogOpen(false);
+      setSelectedTaskDetailId(null);
       return;
     }
 
@@ -85,7 +110,9 @@ export function ProjectTaskPanel({
     void loadArtifacts(activeProject.id);
     void loadNotionMappings(activeProject.id);
     setSelectedArtifactByTaskId({});
+    setDescriptionDrafts({});
     setIsCreateDialogOpen(false);
+    setSelectedTaskDetailId(null);
   }, [activeProject?.id]);
 
   useEffect(() => {
@@ -114,6 +141,14 @@ export function ProjectTaskPanel({
       ),
     [availableArtifacts]
   );
+  const selectedTaskDetail = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskDetailId) ?? null,
+    [selectedTaskDetailId, tasks]
+  );
+  const showViewSwitcher = !readOnly && expandableItems;
+  const taskViewMode = viewMode ?? internalTaskViewMode;
+  const setTaskViewMode = onViewModeChange ?? setInternalTaskViewMode;
+  const showInternalViewSwitcher = showViewSwitcher && !viewMode;
 
   async function loadTasks(projectId: string) {
     setIsLoading(true);
@@ -240,6 +275,38 @@ export function ProjectTaskPanel({
     }
   }
 
+  async function handleSaveTaskDescription(task: ProjectTask) {
+    const nextDescription = (descriptionDrafts[task.id] ?? task.description ?? '').trim();
+    const currentDescription = task.description ?? '';
+
+    if (nextDescription === currentDescription) {
+      return;
+    }
+
+    setSavingDescriptionIds((prev) => new Set(prev).add(task.id));
+    try {
+      const updated = await updateProjectTask(task.id, {
+        description: nextDescription || null,
+      });
+
+      setTasks((prev) =>
+        sortTasks(prev.map((row) => (row.id === task.id ? updated : row)))
+      );
+      setDescriptionDrafts((prev) => ({ ...prev, [task.id]: updated.description ?? '' }));
+      toast.success('Task notes updated');
+    } catch (error: any) {
+      toast.error('Failed to update task notes', {
+        description: error?.message ?? 'Unable to save the notes.',
+      });
+    } finally {
+      setSavingDescriptionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(task.id);
+        return next;
+      });
+    }
+  }
+
   async function handleLinkExistingArtifact(task: ProjectTask) {
     const selectedArtifactId = selectedArtifactByTaskId[task.id];
 
@@ -285,6 +352,70 @@ export function ProjectTaskPanel({
     }
   }
 
+  function renderTaskDescriptionEditor(task: ProjectTask) {
+    const currentDescription = task.description ?? '';
+    const draft = descriptionDrafts[task.id] ?? currentDescription;
+    const isSaving = savingDescriptionIds.has(task.id);
+    const hasChanges = draft.trim() !== currentDescription;
+
+    return (
+      <div className="space-y-2 rounded-lg border border-[#E5E7EB] bg-white p-3">
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor={`${task.id}-description`} className="text-sm font-medium text-[#111827]">
+            Notes / Description
+          </Label>
+          {hasChanges ? (
+            <span className="text-xs text-[#6B7280]">Unsaved changes</span>
+          ) : null}
+        </div>
+        <Textarea
+          id={`${task.id}-description`}
+          value={draft}
+          onChange={(event) =>
+            setDescriptionDrafts((prev) => ({
+              ...prev,
+              [task.id]: event.target.value,
+            }))
+          }
+          placeholder="Add additional context, notes, acceptance hints, or follow-up details for this task."
+          disabled={isSaving}
+          className="min-h-[110px] resize-y"
+        />
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setDescriptionDrafts((prev) => ({
+                ...prev,
+                [task.id]: currentDescription,
+              }))
+            }
+            disabled={isSaving || !hasChanges}
+          >
+            Reset
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void handleSaveTaskDescription(task)}
+            disabled={isSaving || !hasChanges}
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              'Save notes'
+            )}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   function renderTask(task: ProjectTask) {
     const moduleLabel = task.related_module
       ? PROJECT_TASK_MODULE_LABELS[task.related_module]
@@ -305,6 +436,7 @@ export function ProjectTaskPanel({
     const isExportingTask = exportingTaskIds.has(task.id);
     const selectedArtifactId = selectedArtifactByTaskId[task.id] ?? '';
     const canLinkArtifact = !readOnly && task.status === 'open' && linkableArtifacts.length > 0;
+    const descriptionEditor = renderTaskDescriptionEditor(task);
     const toggleExpanded = () => {
       setExpandedTaskIds((prev) => {
         const next = new Set(prev);
@@ -371,44 +503,72 @@ export function ProjectTaskPanel({
     const actions = (
       <TaskActionStack>
         {task.status === 'completed' && linkedArtifactRoute ? (
-          <TaskActionButton onClick={() => navigate(linkedArtifactRoute)}>
-            View Artifact
-            <ArrowRight className="ml-2 h-4 w-4" />
-          </TaskActionButton>
+          <TaskActionButton
+            label="View Artifact"
+            icon={<ArrowRight className="h-4 w-4" />}
+            onClick={() => navigate(linkedArtifactRoute)}
+          />
         ) : null}
         {task.related_module && task.status === 'open' ? (
-          <TaskActionButton onClick={() => navigate(TASK_MODULE_ROUTES[task.related_module!])}>
-            Open Module
-            <ArrowRight className="ml-2 h-4 w-4" />
-          </TaskActionButton>
+          <TaskActionButton
+            label="Open Module"
+            icon={<ArrowRight className="h-4 w-4" />}
+            onClick={() => navigate(TASK_MODULE_ROUTES[task.related_module!])}
+          />
         ) : null}
         <TaskActionButton
+          label={task.status === 'completed' ? 'Reopen' : 'Complete'}
+          icon={<CheckCircle2 className="h-4 w-4" />}
           variant={task.status === 'completed' ? 'outline' : 'default'}
           onClick={() => void handleToggleTask(task)}
-        >
-          <CheckCircle2 className="mr-2 h-4 w-4" />
-          {task.status === 'completed' ? 'Reopen' : 'Complete'}
-        </TaskActionButton>
+        />
         <TaskActionButton
+          label={notionMapping?.last_sync_status === 'success' ? 'Update Notion' : 'Add to Notion'}
+          icon={
+            isExportingTask ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <UploadCloud className="h-4 w-4" />
+            )
+          }
           onClick={() => void handleExportTask(task)}
           disabled={isExportingTask}
-        >
-          {isExportingTask ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <UploadCloud className="mr-2 h-4 w-4" />
-          )}
-          {notionMapping?.last_sync_status === 'success' ? 'Update Notion' : 'Add to Notion'}
-        </TaskActionButton>
+        />
         {notionMapping?.notion_url && notionMapping.last_sync_status === 'success' ? (
-          <Button asChild variant="outline" size="sm" className="h-9 w-full justify-between">
+          <Button asChild variant="outline" size="sm" className="h-9 w-9 shrink-0 px-0 sm:w-auto sm:px-3">
             <a href={notionMapping.notion_url} target="_blank" rel="noreferrer">
-              Open Notion Task
-              <ExternalLink className="ml-2 h-4 w-4" />
+              <ExternalLink className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Open Notion Task</span>
             </a>
           </Button>
         ) : null}
       </TaskActionStack>
+    );
+    const detailsContent = (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B7280]">
+          {dueLabel ? (
+            <span className="inline-flex items-center gap-1">
+              <CalendarDays className="h-3.5 w-3.5" />
+              Due {dueLabel}
+            </span>
+          ) : (
+            <span>No due date</span>
+          )}
+          <span>Created by: {task.created_by_email ?? 'Unknown'}</span>
+          <span>Updated by: {task.updated_by_email ?? task.created_by_email ?? 'Unknown'}</span>
+          {task.status === 'completed' && linkedArtifactLabel ? (
+            <span>Completed via: {linkedArtifactLabel}</span>
+          ) : null}
+          {notionMapping?.last_sync_status === 'success' ? (
+            <span>Synced {new Date(notionMapping.last_synced_at).toLocaleDateString()}</span>
+          ) : null}
+        </div>
+
+        {descriptionEditor}
+        {artifactLinker}
+        {actions}
+      </div>
     );
 
     if (expandableItems) {
@@ -464,21 +624,7 @@ export function ProjectTaskPanel({
 
           {isExpanded ? (
             <div className="border-t border-[#E5E7EB] p-3">
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B7280]">
-                  <span>Created by: {task.created_by_email ?? 'Unknown'}</span>
-                  <span>Updated by: {task.updated_by_email ?? task.created_by_email ?? 'Unknown'}</span>
-                </div>
-
-                {task.description ? (
-                  <p className="whitespace-pre-line rounded-md bg-[#F9FAFB] p-3 text-sm text-[#374151]">
-                    {task.description}
-                  </p>
-                ) : null}
-
-                {artifactLinker}
-                {actions}
-              </div>
+              {detailsContent}
             </div>
           ) : null}
         </div>
@@ -490,7 +636,7 @@ export function ProjectTaskPanel({
         key={task.id}
         className="rounded-lg border border-[#E5E7EB] bg-white p-4"
       >
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px] md:items-start">
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
           <div className="min-w-0 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <p className={`text-sm font-medium ${task.status === 'completed' ? 'text-[#6B7280] line-through' : 'text-[#111827]'}`}>
@@ -528,12 +674,243 @@ export function ProjectTaskPanel({
               ) : null}
             </div>
 
-            {artifactLinker}
           </div>
 
           {actions}
         </div>
       </div>
+    );
+  }
+
+  function renderTaskTicket(task: ProjectTask) {
+    const moduleLabel = task.related_module
+      ? PROJECT_TASK_MODULE_LABELS[task.related_module]
+      : null;
+    const dueLabel = task.due_date
+      ? new Date(`${task.due_date}T00:00:00`).toLocaleDateString()
+      : 'No due date';
+
+    return (
+      <button
+        key={task.id}
+        type="button"
+        onClick={() => setSelectedTaskDetailId(task.id)}
+        className={`w-full rounded-lg border p-3 text-left transition hover:-translate-y-0.5 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3B82F6] focus-visible:ring-offset-2 ${
+          task.status === 'completed'
+            ? 'border-emerald-200 bg-emerald-50/70'
+            : 'border-[#D7E3F8] bg-white'
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <p className={`text-sm font-medium ${task.status === 'completed' ? 'text-[#065F46] line-through' : 'text-[#111827]'}`}>
+            {task.title}
+          </p>
+          <Badge variant={task.status === 'completed' ? 'secondary' : 'outline'}>
+            {task.status === 'completed' ? 'Done' : 'Open'}
+          </Badge>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#6B7280]">
+          <span className="inline-flex items-center gap-1">
+            <CalendarDays className="h-3.5 w-3.5" />
+            {dueLabel}
+          </span>
+          {moduleLabel ? <span>{moduleLabel}</span> : null}
+        </div>
+      </button>
+    );
+  }
+
+  function renderKanbanView() {
+    const columns = [
+      { key: 'open', title: 'Open', items: openTasks },
+      { key: 'completed', title: 'Completed', items: completedTasks },
+    ];
+
+    return (
+      <div className="grid gap-4 lg:grid-cols-2">
+        {columns.map((column) => (
+          <section
+            key={column.key}
+            className="min-h-[320px] rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4"
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-[#111827]">{column.title}</h3>
+              <Badge variant={column.key === 'open' ? 'outline' : 'secondary'}>
+                {column.items.length}
+              </Badge>
+            </div>
+            <div className="space-y-3">
+              {column.items.length > 0 ? (
+                column.items.map(renderTaskTicket)
+              ) : (
+                <div className="rounded-lg border border-dashed border-[#CBD5E1] bg-white/70 p-4 text-sm text-[#64748B]">
+                  No {column.title.toLowerCase()} tasks.
+                </div>
+              )}
+            </div>
+          </section>
+        ))}
+      </div>
+    );
+  }
+
+  function renderCalendarView() {
+    const year = calendarAnchorDate.getFullYear();
+    const month = calendarAnchorDate.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const startOffset = firstDay.getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const cells = Array.from({ length: Math.ceil((startOffset + daysInMonth) / 7) * 7 }, (_, index) => {
+      const dayNumber = index - startOffset + 1;
+      return dayNumber >= 1 && dayNumber <= daysInMonth ? dayNumber : null;
+    });
+    const tasksByDate = tasks.reduce<Record<string, ProjectTask[]>>((acc, task) => {
+      if (!task.due_date) return acc;
+      acc[task.due_date] = [...(acc[task.due_date] ?? []), task];
+      return acc;
+    }, {});
+    const monthLabel = calendarAnchorDate.toLocaleDateString(undefined, {
+      month: 'long',
+      year: 'numeric',
+    });
+
+    return (
+      <div className="rounded-xl border border-[#E5E7EB] bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E5E7EB] p-4">
+          <div>
+            <h3 className="text-sm font-semibold text-[#111827]">{monthLabel}</h3>
+            <p className="text-xs text-[#6B7280]">Open tasks are blue. Completed tasks are green.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCalendarAnchorDate(new Date(year, month - 1, 1))}
+              aria-label="Previous month"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCalendarAnchorDate(new Date())}
+            >
+              Today
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCalendarAnchorDate(new Date(year, month + 1, 1))}
+              aria-label="Next month"
+            >
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-7 border-b border-[#E5E7EB] bg-[#F8FAFC] text-center text-xs font-medium text-[#64748B]">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+            <div key={day} className="px-2 py-2">
+              {day}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-7">
+          {cells.map((dayNumber, index) => {
+            const dateKey = dayNumber
+              ? `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNumber).padStart(2, '0')}`
+              : null;
+            const dayTasks = dateKey ? tasksByDate[dateKey] ?? [] : [];
+
+            return (
+              <div
+                key={`${dayNumber ?? 'blank'}-${index}`}
+                className="min-h-[118px] border-b border-r border-[#E5E7EB] p-2 last:border-r-0"
+              >
+                {dayNumber ? (
+                  <>
+                    <div className="mb-2 text-xs font-medium text-[#64748B]">{dayNumber}</div>
+                    <div className="space-y-1.5">
+                      {dayTasks.slice(0, 3).map((task) => (
+                        <button
+                          key={task.id}
+                          type="button"
+                          onClick={() => setSelectedTaskDetailId(task.id)}
+                          className={`block w-full truncate rounded-md px-2 py-1 text-left text-xs font-medium ${
+                            task.status === 'completed'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-blue-100 text-blue-800'
+                          }`}
+                          title={task.title}
+                        >
+                          {task.title}
+                        </button>
+                      ))}
+                      {dayTasks.length > 3 ? (
+                        <p className="text-xs text-[#64748B]">+{dayTasks.length - 3} more</p>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  function renderTaskDetailModal(task: ProjectTask | null) {
+    if (!task) return null;
+
+    const moduleLabel = task.related_module
+      ? PROJECT_TASK_MODULE_LABELS[task.related_module]
+      : null;
+    const dueLabel = task.due_date
+      ? new Date(`${task.due_date}T00:00:00`).toLocaleDateString()
+      : 'No due date';
+    const linkedArtifactLabel = task.completed_artifact_type
+      ? PROJECT_TASK_MODULE_LABELS[task.completed_artifact_type]
+      : null;
+
+    return (
+      <Dialog open={!!selectedTaskDetailId} onOpenChange={(open) => !open && setSelectedTaskDetailId(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{task.title}</DialogTitle>
+            <DialogDescription>
+              Task detail for this project workspace.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={task.status === 'completed' ? 'secondary' : 'outline'}>
+                {task.status === 'completed' ? 'Completed' : 'Open'}
+              </Badge>
+              {moduleLabel ? (
+                <Badge variant="outline" className="bg-[#EFF6FF] text-[#1D4ED8]">
+                  {moduleLabel}
+                </Badge>
+              ) : null}
+              <NotionStatusBadge mapping={notionMappings[task.id]} />
+            </div>
+
+            <div className="grid gap-3 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-3 text-sm text-[#4B5563] sm:grid-cols-2">
+              <span className="inline-flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-[#64748B]" />
+                {dueLabel}
+              </span>
+              <span>Created by: {task.created_by_email ?? 'Unknown'}</span>
+              <span>Updated by: {task.updated_by_email ?? task.created_by_email ?? 'Unknown'}</span>
+              {linkedArtifactLabel ? <span>Completed via: {linkedArtifactLabel}</span> : null}
+            </div>
+
+            {renderTaskDescriptionEditor(task)}
+          </div>
+        </DialogContent>
+      </Dialog>
     );
   }
 
@@ -555,6 +932,33 @@ export function ProjectTaskPanel({
           <div className="flex items-center gap-2 text-xs text-[#6B7280]">
             <Badge variant="outline">{openTasks.length} open</Badge>
             {!compact || expandableItems ? <Badge variant="secondary">{completedTasks.length} completed</Badge> : null}
+            {showInternalViewSwitcher ? (
+              <div className="flex rounded-lg border border-[#E5E7EB] bg-white p-1">
+                {[
+                  { value: 'list' as const, label: 'List', icon: ClipboardList },
+                  { value: 'kanban' as const, label: 'Kanban', icon: ClipboardList },
+                  { value: 'calendar' as const, label: 'Calendar', icon: CalendarDays },
+                ].map((view) => {
+                  const Icon = view.icon;
+                  const isActive = taskViewMode === view.value;
+                  return (
+                    <Button
+                      key={view.value}
+                      type="button"
+                      size="sm"
+                      variant={isActive ? 'default' : 'ghost'}
+                      onClick={() => setTaskViewMode(view.value)}
+                      className="h-8 gap-1.5 px-2"
+                      aria-label={`${view.label} view`}
+                      title={`${view.label} view`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span className="hidden lg:inline">{view.label}</span>
+                    </Button>
+                  );
+                })}
+              </div>
+            ) : null}
             {showComposer ? (
               <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
                 <DialogTrigger asChild>
@@ -670,6 +1074,10 @@ export function ProjectTaskPanel({
                   ? 'No open tasks yet. Add one above to anchor your next deliverable.'
                   : 'No tasks yet for this project.'}
               </div>
+            ) : showViewSwitcher && taskViewMode === 'kanban' ? (
+              renderKanbanView()
+            ) : showViewSwitcher && taskViewMode === 'calendar' ? (
+              renderCalendarView()
             ) : (
               <div className={`space-y-3 ${listMaxHeightClass ? `${listMaxHeightClass} overflow-y-auto pr-1` : ''}`}>
                 {visibleTasks.map(renderTask)}
@@ -680,6 +1088,7 @@ export function ProjectTaskPanel({
                 ) : null}
               </div>
             )}
+            {renderTaskDetailModal(selectedTaskDetail)}
           </>
         )}
       </CardContent>
@@ -749,19 +1158,21 @@ function NotionStatusBadge({ mapping }: { mapping?: NotionSyncMapping }) {
 
 function TaskActionStack({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex w-full flex-col gap-2 md:w-[180px]">
+    <div className="flex w-full flex-wrap items-center gap-2 md:justify-end">
       {children}
     </div>
   );
 }
 
 function TaskActionButton({
-  children,
+  label,
+  icon,
   variant = 'outline',
   disabled,
   onClick,
 }: {
-  children: React.ReactNode;
+  label: string;
+  icon: React.ReactNode;
   variant?: 'default' | 'outline';
   disabled?: boolean;
   onClick: () => void;
@@ -772,9 +1183,12 @@ function TaskActionButton({
       variant={variant}
       disabled={disabled}
       onClick={onClick}
-      className="h-9 w-full justify-between"
+      title={label}
+      aria-label={label}
+      className="h-9 w-9 shrink-0 px-0 sm:w-auto sm:px-3"
     >
-      {children}
+      <span className="sm:mr-2">{icon}</span>
+      <span className="hidden sm:inline">{label}</span>
     </Button>
   );
 }
