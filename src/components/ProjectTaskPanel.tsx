@@ -636,10 +636,10 @@ export function ProjectTaskPanel({
         key={task.id}
         className="rounded-lg border border-[#E5E7EB] bg-white p-4"
       >
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+        <div className={`${compact ? 'space-y-3' : 'grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start'}`}>
           <div className="min-w-0 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <p className={`text-sm font-medium ${task.status === 'completed' ? 'text-[#6B7280] line-through' : 'text-[#111827]'}`}>
+              <p className={`min-w-0 flex-1 text-sm font-medium ${task.status === 'completed' ? 'text-[#6B7280] line-through' : 'text-[#111827]'}`}>
                 {task.title}
               </p>
               <Badge variant={task.status === 'completed' ? 'secondary' : 'outline'}>
@@ -653,7 +653,7 @@ export function ProjectTaskPanel({
               <NotionStatusBadge mapping={notionMapping} />
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B7280]">
+            <div className={`flex text-xs text-[#6B7280] ${compact ? 'flex-col gap-1' : 'flex-wrap items-center gap-3'}`}>
               {dueLabel ? (
                 <span className="inline-flex items-center gap-1">
                   <CalendarDays className="h-3.5 w-3.5" />
@@ -662,8 +662,12 @@ export function ProjectTaskPanel({
               ) : (
                 <span>No due date</span>
               )}
-              <span>Created by: {task.created_by_email ?? 'Unknown'}</span>
-              <span>Updated by: {task.updated_by_email ?? task.created_by_email ?? 'Unknown'}</span>
+              {!compact ? (
+                <>
+                  <span>Created by: {task.created_by_email ?? 'Unknown'}</span>
+                  <span>Updated by: {task.updated_by_email ?? task.created_by_email ?? 'Unknown'}</span>
+                </>
+              ) : null}
               {task.status === 'completed' && linkedArtifactLabel ? (
                 <span>
                   Completed via: {linkedArtifactLabel}
@@ -676,7 +680,9 @@ export function ProjectTaskPanel({
 
           </div>
 
-          {actions}
+          <div className={compact ? 'pt-1' : ''}>
+            {actions}
+          </div>
         </div>
       </div>
     );
