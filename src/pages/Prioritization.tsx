@@ -24,6 +24,7 @@ import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { ArtifactActions } from '@/components/ArtifactActions';
+import { reviseArtifactWithAdvisor } from '@/lib/artifact-revision';
 import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 import {
   PRIORITIZATION_MODELS,
@@ -160,6 +161,7 @@ const [copiedToClipboard, setCopiedToClipboard] = useState(false);
 // 🔑 PM Advisor state
 const [advisorOutput, setAdvisorOutput] = useState<string>('');
 const [isRunningAdvisor, setIsRunningAdvisor] = useState(false);
+const [isRevisingWithAdvisor, setIsRevisingWithAdvisor] = useState(false);
 const [currentArtifactId, setCurrentArtifactId] = useState<string | null>(null);
 const [advisorError, setAdvisorError] = useState<string | null>(null);
 
@@ -670,6 +672,74 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
     setIsRunningAdvisor(false);
   }
 };
+
+  const handleReviseWithAdvisor = async () => {
+    setAdvisorError(null);
+
+    if (!activeProject || !currentArtifactId || !currentOutput || !advisorOutput) {
+      setAdvisorError('Run PM Advisor on an active prioritization artifact before revising.');
+      return;
+    }
+
+    setIsRevisingWithAdvisor(true);
+    try {
+      const result = await reviseArtifactWithAdvisor({
+        project_id: activeProject.id,
+        project_name: activeProject.name,
+        artifact_id: currentArtifactId,
+        artifact_name:
+          (initiativeName && initiativeName.trim()) ||
+          `${selectedModel} Prioritization`,
+        module_type: 'prioritization',
+        artifact_type: `${selectedModel} Prioritization`,
+        original_input: {
+          model: selectedModel,
+          initiative_name: initiativeName,
+          default_effort_scale: defaultEffortScale,
+          notes_context: notesContext,
+          selected_outputs: getSelectedOutputsForModel(),
+          top_n_items: getTopNForModel(),
+          effort_field_name: effortFieldName,
+          max_score_per_factor: maxScorePerFactor,
+          normalize_scores: normalizeScores,
+          rice_config: riceConfig,
+          moscow_config: moscowConfig,
+          value_effort_config: valueEffortConfig,
+          custom_config: customConfig,
+        },
+        original_output: currentOutput,
+        advisor_feedback: advisorOutput,
+        selected_outputs: getSelectedOutputsForModel(),
+        output_language: outputLanguage,
+      });
+
+      await supabaseFetch(`/project_artifacts?id=eq.${currentArtifactId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          output_data: result.output,
+          metadata: {
+            input_schema_version: 1,
+            model: selectedModel,
+            last_modified_by: 'agent',
+            last_modified_at: new Date().toISOString(),
+            revision_source: 'pm_advisor',
+          },
+        }),
+      });
+
+      setCurrentOutput(result.output);
+      setActiveTab('current');
+      await loadSessions();
+      toast({
+        title: 'Prioritization revised',
+        description: 'PM Advisor feedback has been applied where supported.',
+      });
+    } catch (err: any) {
+      setAdvisorError(parseErrorMessage(err));
+    } finally {
+      setIsRevisingWithAdvisor(false);
+    }
+  };
 
   // Load Session
   const loadSession = (session: ProjectArtifact) => {
@@ -1677,9 +1747,27 @@ BUG-003,Fix Login Performance Issue,7,9,6,3,Bug,Auth,To Do,Backend Team`;
                   )}
 
                   {advisorOutput ? (
-                    <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 max-h-[600px] overflow-y-auto">
-                      <ReactMarkdown>{advisorOutput}</ReactMarkdown>
-                    </div>
+                    <>
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          onClick={handleReviseWithAdvisor}
+                          disabled={isRevisingWithAdvisor || !currentArtifactId}
+                        >
+                          {isRevisingWithAdvisor ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Revising...
+                            </>
+                          ) : (
+                            'Revise Output'
+                          )}
+                        </Button>
+                      </div>
+                      <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 max-h-[600px] overflow-y-auto">
+                        <ReactMarkdown>{advisorOutput}</ReactMarkdown>
+                      </div>
+                    </>
                   ) : (
                     <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
                       <p className="text-sm text-muted-foreground">

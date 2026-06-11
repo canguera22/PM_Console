@@ -40,6 +40,7 @@ import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { callPMAdvisorAgent } from '@/lib/pm-advisor';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { ArtifactActions } from '@/components/ArtifactActions';
+import { reviseArtifactWithAdvisor } from '@/lib/artifact-revision';
 import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 
 
@@ -273,6 +274,7 @@ export default function ReleaseCommunications() {
   // PM Advisor state
   const [advisorOutput, setAdvisorOutput] = useState<string>('');
   const [isRunningAdvisor, setIsRunningAdvisor] = useState(false);
+  const [isRevisingWithAdvisor, setIsRevisingWithAdvisor] = useState(false);
   const [currentArtifactId, setCurrentArtifactId] = useState<string | null>(null);
 
   // Error state
@@ -682,6 +684,74 @@ await loadSessions();
     } catch (err) {
       console.error('Save failed:', err);
       toast({ title: 'Error', description: 'Failed to save edits', variant: 'destructive' });
+    }
+  };
+
+  const handleReviseWithAdvisor = async () => {
+    setAdvisorError(null);
+
+    if (!activeProject || !currentArtifactId || !currentOutput || !advisorOutput) {
+      const msg = 'Run PM Advisor on an active release artifact before revising.';
+      setAdvisorError(msg);
+      toast({ title: 'Validation Error', description: msg, variant: 'destructive' });
+      return;
+    }
+
+    const nextVersion = currentArtifactVersion + 1;
+    setIsRevisingWithAdvisor(true);
+
+    try {
+      const result = await reviseArtifactWithAdvisor({
+        project_id: activeProject.id,
+        project_name: activeProject.name,
+        artifact_id: currentArtifactId,
+        artifact_name: releaseName || activeProject.name,
+        module_type: 'release_communications',
+        artifact_type: 'Release Communications',
+        original_input: {
+          release_name: releaseName,
+          target_audience: targetAudience,
+          known_risks: knownRisks,
+          selected_outputs: selectedOutputs,
+          csv_filename: csvFile?.name ?? null,
+        },
+        original_output: currentOutput,
+        advisor_feedback: advisorOutput,
+        selected_outputs: selectedOutputs,
+        output_language: outputLanguage,
+      });
+
+      const revisedSections = buildOutputSections(result.output, selectedOutputs);
+      const structuredSections = outputSectionsToStructured(revisedSections);
+
+      await supabaseFetch(`/project_artifacts?id=eq.${currentArtifactId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          output_data: result.output,
+          metadata: {
+            version_number: nextVersion,
+            last_modified_by: 'agent',
+            last_modified_at: new Date().toISOString(),
+            revision_source: 'pm_advisor',
+            output_sections: structuredSections,
+          },
+        }),
+      });
+
+      setCurrentOutput(result.output);
+      setOutputSections(revisedSections);
+      setActiveSectionId(revisedSections[0]?.id ?? null);
+      setCurrentArtifactVersion(nextVersion);
+      setLastModifiedBy('agent');
+      setActiveResultsTab('current');
+      toast({ title: 'Revised', description: `Revised with PM Advisor feedback as v${nextVersion}` });
+      await loadSessions();
+    } catch (err: any) {
+      const errorMessage = parseErrorMessage(err);
+      setAdvisorError(errorMessage);
+      toast({ title: 'Error', description: errorMessage, variant: 'destructive' });
+    } finally {
+      setIsRevisingWithAdvisor(false);
     }
   };
 
@@ -1377,9 +1447,27 @@ setActiveSectionId(sections[0]?.id ?? null);
 
                 <TabsContent value="advisor" className="mt-4 space-y-4">
                   {advisorOutput ? (
-                    <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
-                      <ReactMarkdown>{advisorOutput}</ReactMarkdown>
-                    </div>
+                    <>
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          onClick={handleReviseWithAdvisor}
+                          disabled={isRevisingWithAdvisor || !currentArtifactId}
+                        >
+                          {isRevisingWithAdvisor ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Revising...
+                            </>
+                          ) : (
+                            'Revise Output'
+                          )}
+                        </Button>
+                      </div>
+                      <div className="prose prose-sm max-w-none rounded-lg border bg-muted/30 p-6 dark:prose-invert max-h-[600px] overflow-y-auto">
+                        <ReactMarkdown>{advisorOutput}</ReactMarkdown>
+                      </div>
+                    </>
                   ) : (
                     <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-dashed">
                       <div className="text-center">

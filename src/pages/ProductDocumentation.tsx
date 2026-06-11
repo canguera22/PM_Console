@@ -24,6 +24,7 @@ import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { ArtifactActions } from '@/components/ArtifactActions';
+import { reviseArtifactWithAdvisor } from '@/lib/artifact-revision';
 import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 import Papa from 'papaparse';
 import { supabase } from '@/lib/supabase';
@@ -471,8 +472,9 @@ const handleDrop = useCallback((e: React.DragEvent) => {
 
   // PM Advisor state
   const [advisorOutput, setAdvisorOutput] = useState<string>('');
-  const [isRunningAdvisor, setIsRunningAdvisor] = useState(false);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null); // UUID artifact id
+const [isRunningAdvisor, setIsRunningAdvisor] = useState(false);
+const [currentSessionId, setCurrentSessionId] = useState<string | null>(null); // UUID artifact id
+const [isRevisingWithAdvisor, setIsRevisingWithAdvisor] = useState(false);
 
   // Error state
   const [error, setError] = useState<string | null>(null);
@@ -940,6 +942,70 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
     } finally {
       setIsRunningAdvisor(false);
       console.log('🏁 [Complete] PM Advisor review finished');
+    }
+  };
+
+  const handleReviseWithAdvisor = async () => {
+    setAdvisorError(null);
+
+    if (!activeProject || !currentSessionId || !advisorOutput || !Object.keys(outputByType).length) {
+      const msg = 'Run PM Advisor on an active artifact before revising.';
+      setAdvisorError(msg);
+      toast.error(msg);
+      return;
+    }
+
+    const originalOutput = buildCombinedOutput(outputByType);
+    const nextVersion = currentArtifactVersion + 1;
+
+    setIsRevisingWithAdvisor(true);
+    try {
+      const result = await reviseArtifactWithAdvisor({
+        project_id: activeProject.id,
+        project_name: activeProject.name,
+        artifact_id: currentSessionId,
+        artifact_name: formData.input_name || activeProject.name,
+        module_type: 'product_documentation',
+        artifact_type: 'Product Documentation',
+        original_input: {
+          input_mode: inputMode,
+          form_data: formData,
+          selected_outputs: selectedOutputs,
+        },
+        original_output: originalOutput,
+        advisor_feedback: advisorOutput,
+        selected_outputs: selectedOutputs,
+        output_language: outputLanguage,
+      });
+
+      await supabaseFetch(`/project_artifacts?id=eq.${currentSessionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          output_data: result.output,
+          metadata: {
+            version_number: nextVersion,
+            last_modified_by: 'agent',
+            last_modified_at: new Date().toISOString(),
+            revision_source: 'pm_advisor',
+          },
+        }),
+      });
+
+      const parsed = parseOutputsByMarker(result.output);
+      setOutputByType(
+        Object.keys(parsed).length > 0 ? parsed : { Document: result.output }
+      );
+      setCurrentArtifactVersion(nextVersion);
+      setLastModifiedBy('agent');
+      setActiveResultsTab('current');
+      toast.success(`Revised with PM Advisor feedback as v${nextVersion}`);
+      await loadSessionHistory();
+    } catch (err: any) {
+      const errorMessage = parseErrorMessage(err);
+      setAdvisorError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setIsRevisingWithAdvisor(false);
     }
   };
 
@@ -1796,7 +1862,21 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
 
                     {advisorOutput ? (
                       <div className="space-y-4">
-                        <div className="flex justify-end">
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            size="sm"
+                            onClick={handleReviseWithAdvisor}
+                            disabled={isRevisingWithAdvisor || !currentSessionId}
+                          >
+                            {isRevisingWithAdvisor ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Revising...
+                              </>
+                            ) : (
+                              'Revise Output'
+                            )}
+                          </Button>
                           <Button variant="outline" size="sm" onClick={handleCopyAdvisorOutput}>
                             <Copy className="mr-2 h-4 w-4" />
                             Copy Advisor Review
