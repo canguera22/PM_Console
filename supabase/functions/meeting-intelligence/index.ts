@@ -208,6 +208,96 @@ function normalizeActionItems(raw: unknown) {
     .filter(Boolean);
 }
 
+function normalizeDecisions(raw: unknown) {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((item, index) => {
+      const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const decision = typeof row.decision === 'string' ? row.decision.trim() : '';
+      if (!decision) return null;
+
+      const confidence = row.confidence === 'high' || row.confidence === 'medium' || row.confidence === 'low'
+        ? row.confidence
+        : null;
+
+      return {
+        id: typeof row.id === 'string' && row.id.trim() ? row.id.trim() : `decision-${index + 1}`,
+        decision,
+        summary: typeof row.summary === 'string' && row.summary.trim() ? row.summary.trim() : null,
+        made_by: typeof row.made_by === 'string' && row.made_by.trim() ? row.made_by.trim() : null,
+        source_evidence:
+          typeof row.source_evidence === 'string' && row.source_evidence.trim()
+            ? row.source_evidence.trim()
+            : null,
+        confidence,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeOpenQuestions(raw: unknown) {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((item, index) => {
+      const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const question = typeof row.question === 'string' ? row.question.trim() : '';
+      if (!question) return null;
+
+      const confidence = row.confidence === 'high' || row.confidence === 'medium' || row.confidence === 'low'
+        ? row.confidence
+        : null;
+
+      return {
+        id: typeof row.id === 'string' && row.id.trim() ? row.id.trim() : `question-${index + 1}`,
+        question,
+        summary: typeof row.summary === 'string' && row.summary.trim() ? row.summary.trim() : null,
+        owner_or_source:
+          typeof row.owner_or_source === 'string' && row.owner_or_source.trim()
+            ? row.owner_or_source.trim()
+            : null,
+        source_evidence:
+          typeof row.source_evidence === 'string' && row.source_evidence.trim()
+            ? row.source_evidence.trim()
+            : null,
+        confidence,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeAssumptions(raw: unknown) {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((item, index) => {
+      const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const assumption = typeof row.assumption === 'string' ? row.assumption.trim() : '';
+      if (!assumption) return null;
+
+      const confidence = row.confidence === 'high' || row.confidence === 'medium' || row.confidence === 'low'
+        ? row.confidence
+        : null;
+
+      return {
+        id: typeof row.id === 'string' && row.id.trim() ? row.id.trim() : `assumption-${index + 1}`,
+        assumption,
+        summary: typeof row.summary === 'string' && row.summary.trim() ? row.summary.trim() : null,
+        owner_or_source:
+          typeof row.owner_or_source === 'string' && row.owner_or_source.trim()
+            ? row.owner_or_source.trim()
+            : null,
+        source_evidence:
+          typeof row.source_evidence === 'string' && row.source_evidence.trim()
+            ? row.source_evidence.trim()
+            : null,
+        confidence,
+      };
+    })
+    .filter(Boolean);
+}
+
 function extractActionItemsFromMarkdown(markdown: string) {
   const text = String(markdown || '');
   const sectionMatch = text.match(
@@ -578,6 +668,36 @@ serve(async (req) => {
       "context_validation": "how this item aligns/conflicts with provided docs and artifacts",
       "related_module": "meeting_intelligence|product_documentation|release_communications|prioritization|null"
     }
+  ],
+  "decisions": [
+    {
+      "id": "stable short id",
+      "decision": "confirmed decision in one sentence",
+      "summary": "optional shorter label for the decision",
+      "made_by": "person, role, or group if explicitly clear, else null",
+      "source_evidence": "short quote or paraphrase from the notes",
+      "confidence": "high|medium|low"
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "stable short id",
+      "question": "unresolved question that still needs an answer",
+      "summary": "optional shorter label for the question",
+      "owner_or_source": "person, role, or group if explicitly clear, else null",
+      "source_evidence": "short quote or paraphrase from the notes",
+      "confidence": "high|medium|low"
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "stable short id",
+      "assumption": "stated or implied assumption the project is currently relying on",
+      "summary": "optional shorter label for the assumption",
+      "owner_or_source": "person, role, or group if explicitly clear, else null",
+      "source_evidence": "short quote or paraphrase from the notes",
+      "confidence": "high|medium|low"
+    }
   ]
 }
 
@@ -585,7 +705,23 @@ Rules for action_items:
 - Extract only actionable commitments, follow-ups, decisions requiring work, or due-date-bound reminders.
 - Do not invent due dates. If notes say "Friday", infer the calendar date only when enough date context is available; otherwise use null and explain in description.
 - Use related_module only when the action clearly maps to an existing PM Console module.
-- If no action items exist, return an empty array.`;
+- If no action items exist, return an empty array.
+
+Rules for decisions:
+- Include only decisions that were clearly made or explicitly confirmed in the source material.
+- Do not convert unresolved questions, proposals, or assumptions into decisions.
+- Do not invent decision makers. If the source does not make that clear, use null.
+- If no confirmed decisions exist, return an empty array.
+
+Rules for open_questions:
+- Include only unresolved questions, missing information, or follow-up clarifications still needed.
+- Do not list something as an open question if the answer is already clearly resolved in the source.
+- If no open questions exist, return an empty array.
+
+Rules for assumptions:
+- Include only assumptions explicitly stated or clearly implied as current operating assumptions.
+- Do not elevate facts from authoritative context documents into assumptions.
+- If no assumptions exist, return an empty array.`;
 
     console.log('🤖 [OpenAI] Calling GPT-5.2 Chat...');
     console.log('📊 [OpenAI] Message length:', userMessage.length);
@@ -625,6 +761,9 @@ Rules for action_items:
         ? parsedOutput.output
         : rawOutput;
     const normalizedJsonActionItems = normalizeActionItems(parsedOutput?.action_items);
+    const decisions = normalizeDecisions(parsedOutput?.decisions);
+    const openQuestions = normalizeOpenQuestions(parsedOutput?.open_questions);
+    const assumptions = normalizeAssumptions(parsedOutput?.assumptions);
     const actionItems = normalizedJsonActionItems.length > 0
       ? normalizedJsonActionItems
       : extractActionItemsFromMarkdown(output);
@@ -634,6 +773,9 @@ Rules for action_items:
       duration: `${duration}ms`,
       output_length: output.length,
       action_items: actionItems.length,
+      decisions: decisions.length,
+      open_questions: openQuestions.length,
+      assumptions: assumptions.length,
       tokens_used: data.usage?.total_tokens || 'N/A',
     });
 
@@ -677,6 +819,9 @@ Rules for action_items:
           meeting_type,
           participants,
           action_items: actionItems,
+          decisions,
+          open_questions: openQuestions,
+          assumptions,
           tokens_used: data.usage?.total_tokens,
           duration_ms: duration,
         },
@@ -690,12 +835,109 @@ Rules for action_items:
       // Don't fail the whole request if DB insert fails - just log it
     } else {
       console.log('✅ [Database] Artifact saved', { artifact_id: artifact?.id });
+
+      if (artifact?.id) {
+        const { error: deleteDecisionError } = await supabase
+          .from('project_decisions')
+          .delete()
+          .eq('source_artifact_id', artifact.id);
+
+        if (deleteDecisionError) {
+          console.error('❌ [Database Error] Failed to clear prior decisions', deleteDecisionError);
+        }
+
+        if (decisions.length > 0) {
+          const { error: decisionInsertError } = await supabase
+            .from('project_decisions')
+            .insert(
+              decisions.map((decision) => ({
+                project_id,
+                source_artifact_id: artifact.id,
+                source_artifact_type: 'meeting_intelligence',
+                source_artifact_name: artifact.artifact_name,
+                decision_text: decision.decision,
+                decision_summary: decision.summary,
+                decision_maker: decision.made_by,
+                source_evidence: decision.source_evidence,
+                confidence: decision.confidence,
+                metadata: {
+                  extracted_from: normalizedInputMode,
+                  meeting_type,
+                  participants,
+                },
+              }))
+            );
+
+          if (decisionInsertError) {
+            console.error('❌ [Database Error] Failed to save project decisions', decisionInsertError);
+          }
+        }
+
+        const { error: deleteMemoryItemsError } = await supabase
+          .from('project_memory_items')
+          .delete()
+          .eq('source_artifact_id', artifact.id);
+
+        if (deleteMemoryItemsError) {
+          console.error('❌ [Database Error] Failed to clear prior project memory items', deleteMemoryItemsError);
+        }
+
+        const memoryItems = [
+          ...openQuestions.map((item) => ({
+            project_id,
+            source_artifact_id: artifact.id,
+            source_artifact_type: 'meeting_intelligence',
+            source_artifact_name: artifact.artifact_name,
+            item_type: 'open_question',
+            title: item.question,
+            detail: item.summary,
+            owner_or_source: item.owner_or_source,
+            source_evidence: item.source_evidence,
+            confidence: item.confidence,
+            metadata: {
+              extracted_from: normalizedInputMode,
+              meeting_type,
+              participants,
+            },
+          })),
+          ...assumptions.map((item) => ({
+            project_id,
+            source_artifact_id: artifact.id,
+            source_artifact_type: 'meeting_intelligence',
+            source_artifact_name: artifact.artifact_name,
+            item_type: 'assumption',
+            title: item.assumption,
+            detail: item.summary,
+            owner_or_source: item.owner_or_source,
+            source_evidence: item.source_evidence,
+            confidence: item.confidence,
+            metadata: {
+              extracted_from: normalizedInputMode,
+              meeting_type,
+              participants,
+            },
+          })),
+        ];
+
+        if (memoryItems.length > 0) {
+          const { error: memoryInsertError } = await supabase
+            .from('project_memory_items')
+            .insert(memoryItems);
+
+          if (memoryInsertError) {
+            console.error('❌ [Database Error] Failed to save project memory items', memoryInsertError);
+          }
+        }
+      }
     }
 
     return new Response(
       JSON.stringify({
         output,
         action_items: actionItems,
+        decisions,
+        open_questions: openQuestions,
+        assumptions,
         artifact_id: artifact?.id,
       }),
       {

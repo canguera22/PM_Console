@@ -1,6 +1,11 @@
 import { supabase } from './supabase';
 import { getFunctionErrorMessage } from './function-errors';
-import type { ExtractedActionItem } from '@/types/meeting';
+import type {
+  ExtractedActionItem,
+  ExtractedAssumption,
+  ExtractedDecision,
+  ExtractedOpenQuestion,
+} from '@/types/meeting';
 import type { OutputLanguage } from '@/types/output-language';
 
 export interface MeetingAnalysisInput {
@@ -23,6 +28,9 @@ export interface MeetingAnalysisResult {
   session_id?: string;
   artifact_id?: string;
   action_items?: ExtractedActionItem[];
+  decisions?: ExtractedDecision[];
+  open_questions?: ExtractedOpenQuestion[];
+  assumptions?: ExtractedAssumption[];
 }
 
 type MeetingEdgeResponse = {
@@ -30,6 +38,9 @@ type MeetingEdgeResponse = {
   session_id?: string;
   artifact_id?: string;
   action_items?: ExtractedActionItem[];
+  decisions?: ExtractedDecision[];
+  open_questions?: ExtractedOpenQuestion[];
+  assumptions?: ExtractedAssumption[];
 };
 
 export async function analyzeMeeting(
@@ -56,5 +67,8 @@ export async function analyzeMeeting(
     session_id: data.session_id,
     artifact_id: data.artifact_id,
     action_items: Array.isArray(data.action_items) ? data.action_items : [],
+    decisions: Array.isArray(data.decisions) ? data.decisions : [],
+    open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
+    assumptions: Array.isArray(data.assumptions) ? data.assumptions : [],
   };
 }

@@ -13,7 +13,16 @@ import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, ArrowRight, Loader2, Plus, Trash2 } from 'lucide-react';
 import { analyzeMeeting } from '@/lib/agent';
 import { supabaseFetch } from '@/lib/supabase';
-import { ExtractedActionItem, MeetingInputMode, MeetingSession, MEETING_TYPES, ProjectArtifactRow } from '@/types/meeting';
+import {
+  ExtractedActionItem,
+  ExtractedAssumption,
+  ExtractedDecision,
+  ExtractedOpenQuestion,
+  MeetingInputMode,
+  MeetingSession,
+  MEETING_TYPES,
+  ProjectArtifactRow,
+} from '@/types/meeting';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import ReactMarkdown from 'react-markdown';
 import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
@@ -133,6 +142,15 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       output: a.output_data ?? null,
       action_items: Array.isArray(metadata.action_items)
         ? (metadata.action_items as ExtractedActionItem[])
+        : [],
+      decisions: Array.isArray(metadata.decisions)
+        ? (metadata.decisions as ExtractedDecision[])
+        : [],
+      open_questions: Array.isArray(metadata.open_questions)
+        ? (metadata.open_questions as ExtractedOpenQuestion[])
+        : [],
+      assumptions: Array.isArray(metadata.assumptions)
+        ? (metadata.assumptions as ExtractedAssumption[])
         : [],
       metadata,
       version: typeof metadata.version === 'number' ? metadata.version : 1, 
@@ -321,13 +339,15 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
         method: 'PATCH',
         body: JSON.stringify({
           output_data: editedOutput,
-          metadata: {
-            version: currentVersion + 1,
-            last_modified_by: 'user',
-            last_modified_at: new Date().toISOString(),
-            action_items: actionItems,
-          },
         }),
+      });
+
+      await updateArtifactMetadata({
+        version: currentVersion + 1,
+        last_modified_by: 'user',
+        last_modified_at: new Date().toISOString(),
+        action_items: actionItems,
+        saved_action_item_keys: Array.from(savedActionItemKeys),
       });
 
       setCurrentOutput(editedOutput);
@@ -355,24 +375,73 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
   const getActionItemKey = (item: ExtractedActionItem, index: number) =>
     item.id || `action-${index}`;
 
+  const updateArtifactMetadata = async (patch: Record<string, unknown>) => {
+    if (!currentArtifactId) return;
+
+    const rows = await supabaseFetch<Array<{ metadata: Record<string, unknown> | null }>>(
+      `/project_artifacts?id=eq.${currentArtifactId}&select=metadata`
+    );
+
+    const currentMetadata = rows?.[0]?.metadata ?? {};
+
+    await supabaseFetch(`/project_artifacts?id=eq.${currentArtifactId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        metadata: {
+          ...currentMetadata,
+          ...patch,
+        },
+      }),
+    });
+  };
+
+  const persistReviewedActionItems = async (
+    nextActionItems: ExtractedActionItem[],
+    nextSavedActionItemKeys: Set<string>
+  ) => {
+    if (!currentArtifactId) return;
+
+    try {
+      await updateArtifactMetadata({
+        action_items: nextActionItems,
+        saved_action_item_keys: Array.from(nextSavedActionItemKeys),
+      });
+    } catch (error) {
+      console.error('Failed to persist reviewed action items:', error);
+    }
+  };
+
   const updateActionItem = (
     index: number,
     updates: Partial<ExtractedActionItem>
   ) => {
-    setActionItems((prev) =>
-      prev.map((item, itemIndex) =>
-        itemIndex === index ? { ...item, ...updates } : item
-      )
+    const nextActionItems = actionItems.map((item, itemIndex) =>
+      itemIndex === index ? { ...item, ...updates } : item
     );
+
+    setActionItems(nextActionItems);
+    void persistReviewedActionItems(nextActionItems, savedActionItemKeys);
   };
 
   const removeActionItem = (index: number) => {
-    setActionItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+    const removedItemKey = actionItems[index]
+      ? getActionItemKey(actionItems[index], index)
+      : null;
+    const nextActionItems = actionItems.filter((_, itemIndex) => itemIndex !== index);
+    const nextSavedKeys = new Set(savedActionItemKeys);
+
+    if (removedItemKey) {
+      nextSavedKeys.delete(removedItemKey);
+    }
+
+    setActionItems(nextActionItems);
+    setSavedActionItemKeys(nextSavedKeys);
+    void persistReviewedActionItems(nextActionItems, nextSavedKeys);
   };
 
   const addBlankActionItem = () => {
-    setActionItems((prev) => [
-      ...prev,
+    const nextActionItems = [
+      ...actionItems,
       {
         id: `manual-${Date.now()}`,
         title: '',
@@ -384,7 +453,10 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
         source_evidence: null,
         related_module: null,
       },
-    ]);
+    ];
+
+    setActionItems(nextActionItems);
+    void persistReviewedActionItems(nextActionItems, savedActionItemKeys);
   };
 
   const handleSaveActionItems = async () => {
@@ -427,6 +499,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       }
 
       setSavedActionItemKeys(savedKeys);
+      await persistReviewedActionItems(actionItems, savedKeys);
       toast({
         title: 'Action items saved',
         description: `${unsavedItems.length} item${unsavedItems.length === 1 ? '' : 's'} added to Project Tasks.`,
@@ -453,7 +526,13 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
     setProjectName(session.artifact_name ?? session.project_name ?? '');
     setParticipants(session.participants ?? '');
     setActionItems(session.action_items ?? []);
-    setSavedActionItemKeys(new Set());
+    setSavedActionItemKeys(
+      new Set(
+        Array.isArray(session.metadata?.saved_action_item_keys)
+          ? (session.metadata.saved_action_item_keys as string[])
+          : []
+      )
+    );
 
     
     // Reset editing state

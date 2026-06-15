@@ -12,6 +12,33 @@ export interface ExtractedActionItem {
   related_module?: string | null;
 }
 
+export interface ExtractedDecision {
+  id?: string;
+  decision: string;
+  summary?: string | null;
+  made_by?: string | null;
+  source_evidence?: string | null;
+  confidence?: 'high' | 'medium' | 'low' | null;
+}
+
+export interface ExtractedOpenQuestion {
+  id?: string;
+  question: string;
+  summary?: string | null;
+  owner_or_source?: string | null;
+  source_evidence?: string | null;
+  confidence?: 'high' | 'medium' | 'low' | null;
+}
+
+export interface ExtractedAssumption {
+  id?: string;
+  assumption: string;
+  summary?: string | null;
+  owner_or_source?: string | null;
+  source_evidence?: string | null;
+  confidence?: 'high' | 'medium' | 'low' | null;
+}
+
 export interface MeetingSession {
   id: string;
   created_at: string;
@@ -24,6 +51,9 @@ export interface MeetingSession {
   transcript: string;
   output: string | null;
   action_items?: ExtractedActionItem[];
+  decisions?: ExtractedDecision[];
+  open_questions?: ExtractedOpenQuestion[];
+  assumptions?: ExtractedAssumption[];
   metadata: Record<string, unknown>;
   version: number;
 }
