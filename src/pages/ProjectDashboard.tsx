@@ -5,7 +5,7 @@ import {
   FileText,
   MessageSquare,
   Sparkles,
-  TrendingUp,
+  Compass,
   ChevronRight,
   Filter,
   Search,
@@ -75,8 +75,8 @@ const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
     textColor: 'text-green-700'
   },
   prioritization: {
-    label: 'Backlog Prioritization',
-    icon: TrendingUp,
+    label: 'Discovery',
+    icon: Compass,
     color: 'orange',
     bgColor: 'bg-orange-50',
     borderColor: 'border-orange-200',
@@ -86,8 +86,10 @@ const ARTIFACT_TYPE_CONFIG: Record<string, any> = {
   const getArtifactDisplayName = (artifact: ProjectArtifact) => {
   if (artifact.artifact_type === 'prioritization') {
     return (
-      artifact.input_data?.initiative_name?.trim() ||
-      'Untitled Backlog'
+      artifact.artifact_name ||
+      artifact.input_data?.input?.problem_area?.trim?.() ||
+      artifact.input_data?.problem_area?.trim?.() ||
+      'Untitled Discovery Brief'
     );
   }
 
@@ -297,11 +299,11 @@ const handleStatClick = (type: string) => {
     },
     {
       type: 'prioritization',
-      label: 'Prioritization',
+      label: 'Discovery',
       value: stats.prioritization,
       color: 'orange',
       meta: getActivityMeta('prioritization').deltaLabel,
-      icon: TrendingUp,
+      icon: Compass,
     },
   ];
 
@@ -377,7 +379,7 @@ const handleStatClick = (type: string) => {
                 <option value="meeting_intelligence">Project Notes</option>
                 <option value="product_documentation">Product Documentation</option>
                 <option value="release_communications">Release Communications</option>
-                <option value="prioritization">Backlog Prioritization</option>
+                <option value="prioritization">Discovery</option>
               </select>
             </div>
         </div>

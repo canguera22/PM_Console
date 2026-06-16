@@ -12,7 +12,7 @@ export const PROJECT_TASK_MODULE_LABELS: Record<ProjectTaskModule, string> = {
   meeting_intelligence: 'Project Notes',
   product_documentation: 'Product Documentation',
   release_communications: 'Release Communications',
-  prioritization: 'Backlog Prioritization',
+  prioritization: 'Discovery',
 };
 
 export interface ProjectTask {

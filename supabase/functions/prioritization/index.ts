@@ -7,9 +7,21 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
 const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 
-/* ------------------------------------------------------------------ */
-/* Utilities */
-/* ------------------------------------------------------------------ */
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Content-Type': 'application/json',
+  };
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: corsHeaders(),
+  });
+}
 
 function isValidUUID(uuid: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid);
@@ -58,108 +70,54 @@ async function requireProjectAccess(req: Request, projectId: string): Promise<Re
   return null;
 }
 
-function jsonResponse(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-    },
-  });
-}
-
-function compressContextText(text: string, max = 2200): string {
-  const normalized = String(text ?? '').trim();
+function compactText(value: string, maxLength: number) {
+  const normalized = String(value || '').trim();
   if (!normalized) return '';
-  if (normalized.length <= max) return normalized;
-
-  const head = normalized.slice(0, Math.floor(max * 0.65));
-  const tail = normalized.slice(-Math.floor(max * 0.25));
+  if (normalized.length <= maxLength) return normalized;
+  const head = normalized.slice(0, Math.floor(maxLength * 0.7));
+  const tail = normalized.slice(-Math.floor(maxLength * 0.2));
   return `${head}\n\n[... truncated ...]\n\n${tail}`;
 }
 
-type PrioritizationModel = 'WSJF' | 'RICE' | 'MoSCoW' | 'Value/Effort' | 'Custom';
-
-const SUPPORTED_MODELS: PrioritizationModel[] = [
-  'WSJF',
-  'RICE',
-  'MoSCoW',
-  'Value/Effort',
-  'Custom',
-];
-
-const MODEL_LABELS: Record<PrioritizationModel, string> = {
-  WSJF: 'WSJF',
-  RICE: 'RICE',
-  MoSCoW: 'MoSCoW',
-  'Value/Effort': 'Value/Effort',
-  Custom: 'Custom',
+const DISCOVERY_TYPE_LABELS: Record<string, string> = {
+  customer_interview: 'Customer Interview',
+  support_feedback: 'Support Feedback',
+  sales_feedback: 'Sales Feedback',
+  market_research: 'Market Research',
+  opportunity_sizing: 'Opportunity Sizing',
+  general_discovery: 'General Discovery',
 };
 
-function isSupportedModel(model: string): model is PrioritizationModel {
-  return SUPPORTED_MODELS.includes(model as PrioritizationModel);
-}
-
-/* ------------------------------------------------------------------ */
-/* SYSTEM PROMPT */
-/* ------------------------------------------------------------------ */
-
 const SYSTEM_PROMPT = `
-You are a senior Product Manager reviewing and synthesizing backlog prioritization analyses.
+You are a senior Product Manager performing discovery synthesis.
 
-Your job is NOT to restate calculations or raw data.
-Your job IS to help a PM make better sequencing and planning decisions.
+Your job is to turn raw product signals into a grounded, decision-useful discovery brief.
 
-STRICT RULES:
-- Never reproduce the raw CSV or full tables
-- Never explain prioritization mechanics
-- Assume the reader understands prioritization frameworks
-- Focus on implications, not arithmetic
+Hard rules:
+- Use only the supplied source material, project context documents, project memory, and prior project artifacts.
+- Do not hallucinate customer facts, business outcomes, technical constraints, or certainty that the evidence does not support.
+- Separate observed evidence from interpretation.
+- When something is not confirmed, label it as an assumption, open question, or hypothesis.
+- Be concise, high-signal, and PM-to-PM in tone.
 
-WHAT YOU SHOULD DO:
-- Highlight which items rise to the top and WHY
-- Call out meaningful tradeoffs and opportunity costs
-- Identify execution risks, dependencies, and sequencing concerns
-- Provide practical next-step guidance a PM could act on
-
-OUTPUT STYLE:
-- Executive, concise, and confident
-- PM-to-PM tone (not instructional)
-- Insight-dense, not verbose
-
-REQUIRED STRUCTURE:
+Required structure:
 1. Executive Summary
-2. Priority Highlights (Top Items Only)
-3. Key Tradeoffs & Insights
-4. Risks & Dependencies
-5. Recommended Next Actions
-6. Conflicts with Context Documents
+2. Key Themes
+3. Pain Points
+4. Opportunity Areas
+5. User Stories / JTBD Signals
+6. Open Questions & Assumptions
+7. Recommended Next Steps
+8. Conflicts with Context Documents
 
-FINAL SECTION REQUIREMENT:
-- The last section header must be exactly: "## Conflicts with Context Documents"
-- Cross-check your recommendations and claims against uploaded project context documents and previously generated project artifacts (if provided).
+Final section rule:
+- The last heading must be exactly: "## Conflicts with Context Documents"
 - If no conflicts are found, explicitly write: "No conflicts identified"
-
-You may reference computed scores/categories selectively if they add decision value.
-Never mirror the full dataset.
-`;
-
-/* ------------------------------------------------------------------ */
-/* MAIN HANDLER */
-/* ------------------------------------------------------------------ */
+`.trim();
 
 serve(async (req) => {
-  const startTime = Date.now();
-
-  /* ---------------- CORS ---------------- */
   if (req.method === 'OPTIONS') {
-    return new Response('ok', {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers':
-          'authorization, x-client-info, apikey, content-type',
-      },
-    });
+    return new Response('ok', { headers: corsHeaders() });
   }
 
   try {
@@ -167,54 +125,32 @@ serve(async (req) => {
       throw new Error('OPENAI_API_KEY not configured');
     }
 
-    const payload = await req.json();
-
+    const body = await req.json();
     const {
-      csv_content,
-      model = 'WSJF',
-      effort_field_name = 'Job Size',
-      max_score_per_factor = 10,
-      normalize_scores = true,
-      rice_config,
-      moscow_config,
-      value_effort_config,
-      custom_config,
-      initiative_name,
-      default_effort_scale,
-      notes_context,
-      selected_outputs = [],
-      top_n_items,
       project_id,
       project_name,
       artifact_name,
+      discovery_type = 'general_discovery',
+      source_material,
+      problem_area,
+      target_segment,
+      research_goal,
+      notes_context,
+      signal_focus,
+      selected_outputs = [],
       output_language,
-    } = payload;
-    const normalizedOutputLanguage =
-      output_language === 'spanish' ? 'spanish' : 'english';
-    const outputLanguageLabel =
-      normalizedOutputLanguage === 'spanish' ? 'Spanish' : 'English';
-
-    /* ---------------- Validation ---------------- */
-
-    if (!csv_content) {
-      return jsonResponse(
-        { error: 'Missing csv_content' },
-        400
-      );
-    }
-
-    if (!isSupportedModel(model)) {
-      return jsonResponse(
-        { error: `Unsupported model. Supported models: ${SUPPORTED_MODELS.join(', ')}` },
-        400
-      );
-    }
+    } = body;
 
     if (!project_id || !isValidUUID(project_id)) {
-      return jsonResponse(
-        { error: 'project_id must be a valid UUID' },
-        400
-      );
+      return jsonResponse({ error: 'project_id must be a valid UUID' }, 400);
+    }
+
+    if (!source_material || !String(source_material).trim()) {
+      return jsonResponse({ error: 'source_material is required' }, 400);
+    }
+
+    if (!Array.isArray(selected_outputs) || selected_outputs.length === 0) {
+      return jsonResponse({ error: 'selected_outputs must contain at least one output type' }, 400);
     }
 
     const accessError = await requireProjectAccess(req, project_id);
@@ -222,273 +158,145 @@ serve(async (req) => {
       return accessError;
     }
 
-    if (!Array.isArray(selected_outputs) || selected_outputs.length === 0) {
-      return jsonResponse(
-        { error: 'selected_outputs must contain at least one output type' },
-        400
-      );
-    }
+    const [
+      { data: projectDocs, error: docsError },
+      { data: projectArtifacts, error: artifactsError },
+      { data: decisions, error: decisionsError },
+      { data: memoryItems, error: memoryItemsError },
+    ] = await Promise.all([
+      supabase
+        .from('project_documents')
+        .select('id, name, extracted_text, created_at, document_type, doc_type')
+        .eq('project_id', project_id)
+        .eq('status', 'active')
+        .not('extracted_text', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(8),
+      supabase
+        .from('project_artifacts')
+        .select('id, artifact_type, artifact_name, output_data, created_at')
+        .eq('project_id', project_id)
+        .eq('status', 'active')
+        .not('output_data', 'is', null)
+        .neq('artifact_type', 'pm_advisor_feedback')
+        .order('created_at', { ascending: false })
+        .limit(8),
+      supabase
+        .from('project_decisions')
+        .select('decision_summary, decision_text, decision_maker, created_at')
+        .eq('project_id', project_id)
+        .order('created_at', { ascending: false })
+        .limit(10),
+      supabase
+        .from('project_memory_items')
+        .select('item_type, title, detail, created_at')
+        .eq('project_id', project_id)
+        .order('created_at', { ascending: false })
+        .limit(12),
+    ]);
 
-    if (model === 'RICE') {
-      const missing = [
-        rice_config?.reachColumn ? null : 'reachColumn',
-        rice_config?.impactColumn ? null : 'impactColumn',
-        rice_config?.confidenceColumn ? null : 'confidenceColumn',
-        rice_config?.effortColumn ? null : 'effortColumn',
-      ].filter(Boolean);
-      if (missing.length > 0) {
-        return jsonResponse(
-          { error: `Missing RICE config fields: ${missing.join(', ')}` },
-          400
-        );
-      }
-    }
+    if (docsError) console.warn('[DISCOVERY] Failed to load project documents', docsError);
+    if (artifactsError) console.warn('[DISCOVERY] Failed to load project artifacts', artifactsError);
+    if (decisionsError) console.warn('[DISCOVERY] Failed to load project decisions', decisionsError);
+    if (memoryItemsError) console.warn('[DISCOVERY] Failed to load project memory items', memoryItemsError);
 
-    if (model === 'MoSCoW' && !moscow_config?.moscowColumn) {
-      return jsonResponse(
-        { error: 'Missing MoSCoW config field: moscowColumn' },
-        400
-      );
-    }
+    const projectDocsContext =
+      Array.isArray(projectDocs) && projectDocs.length > 0
+        ? projectDocs
+            .filter((doc) => doc.extracted_text && doc.extracted_text.trim().length > 0)
+            .map((doc) => {
+              const docType = doc.document_type || doc.doc_type || 'reference';
+              return `### ${doc.name} (${docType})\n${compactText(doc.extracted_text, 2200)}`;
+            })
+            .join('\n\n')
+        : '[No uploaded context documents]';
 
-    if (model === 'Value/Effort') {
-      const missing = [
-        value_effort_config?.valueColumn ? null : 'valueColumn',
-        value_effort_config?.effortColumn ? null : 'effortColumn',
-      ].filter(Boolean);
-      if (missing.length > 0) {
-        return jsonResponse(
-          { error: `Missing Value/Effort config fields: ${missing.join(', ')}` },
-          400
-        );
-      }
-    }
+    const projectArtifactsContext =
+      Array.isArray(projectArtifacts) && projectArtifacts.length > 0
+        ? projectArtifacts
+            .map((artifact) => {
+              return `### ${artifact.artifact_name || artifact.artifact_type} (${artifact.artifact_type})\n${compactText(String(artifact.output_data || ''), 1500)}`;
+            })
+            .join('\n\n')
+        : '[No prior project artifacts]';
 
-    if (model === 'Custom') {
-      if (!Array.isArray(custom_config?.factors) || custom_config.factors.length === 0) {
-        return jsonResponse(
-          { error: 'Custom model requires at least one factor in custom_config.factors' },
-          400
-        );
-      }
-    }
-  
-  /* ---------------- Load Project Context Documents ---------------- */
+    const decisionsContext =
+      Array.isArray(decisions) && decisions.length > 0
+        ? decisions
+            .map((decision) => {
+              const maker = decision.decision_maker ? ` | by ${decision.decision_maker}` : '';
+              return `- ${decision.decision_summary || decision.decision_text}${maker}`;
+            })
+            .join('\n')
+        : '[No stored decisions]';
 
-const { data: projectDocs, error: docsError } = await supabase
-  .from('project_documents')
-  .select('id, name, extracted_text, created_at')
-  .eq('project_id', project_id)
-  .eq('status', 'active')
-  .not('extracted_text', 'is', null)
-  .order('created_at', { ascending: false });
+    const memoryItemsContext =
+      Array.isArray(memoryItems) && memoryItems.length > 0
+        ? memoryItems
+            .map((item) => `- ${item.item_type}: ${item.title}${item.detail ? ` — ${item.detail}` : ''}`)
+            .join('\n')
+        : '[No stored open questions or assumptions]';
 
-if (docsError) {
-  console.warn('[DOCS WARNING] Failed to load project documents', docsError);
-}
+    const normalizedOutputLanguage = output_language === 'spanish' ? 'Spanish' : 'English';
+    const discoveryLabel = DISCOVERY_TYPE_LABELS[discovery_type] || 'General Discovery';
 
-const projectDocsContext =
-  Array.isArray(projectDocs) && projectDocs.length > 0
-    ? projectDocs
-        .filter(d => d.extracted_text && d.extracted_text.trim().length > 0)
-        .map(d => {
-          const text = d.extracted_text;
-          const snippet = compressContextText(text, 2600);
+    const userPrompt = `
+PROJECT
+- Project: ${project_name || '(not provided)'}
+- Discovery Type: ${discoveryLabel}
+- Problem Area: ${problem_area || '(not provided)'}
+- Customer / Segment: ${target_segment || '(not provided)'}
+- Research Goal: ${research_goal || '(not provided)'}
+- Requested Outputs: ${selected_outputs.join(', ')}
 
-          return `### ${d.name}\n${snippet}`;
-        })
-        .join('\n\n')
-    : '';
+OUTPUT LANGUAGE
+- Write all user-facing markdown output in ${normalizedOutputLanguage}.
+- Keep product names, acronyms, quoted source language, and the exact final heading "## Conflicts with Context Documents" unchanged.
 
-const { data: projectArtifacts, error: artifactsError } = await supabase
-  .from('project_artifacts')
-  .select('artifact_type, artifact_name, output_data, created_at')
-  .eq('project_id', project_id)
-  .eq('status', 'active')
-  .not('output_data', 'is', null)
-  .neq('artifact_type', 'pm_advisor_feedback')
-  .order('created_at', { ascending: false });
+RAW SOURCE MATERIAL
+${compactText(String(source_material), 18000)}
 
-if (artifactsError) {
-  console.warn('[ARTIFACTS WARNING] Failed to load project artifacts', artifactsError);
-}
+OPTIONAL PM CONTEXT
+${notes_context ? compactText(String(notes_context), 3000) : '[None provided]'}
 
-const projectArtifactsContext =
-  Array.isArray(projectArtifacts) && projectArtifacts.length > 0
-    ? projectArtifacts
-        .map(a => {
-          const body = typeof a.output_data === 'string' ? a.output_data : '';
-          const snippet = compressContextText(body, 1800);
-          return `### ${a.artifact_name || a.artifact_type} (${a.artifact_type})\n${snippet}`;
-        })
-        .join('\n\n')
-    : '';
+SIGNAL FOCUS
+${signal_focus ? compactText(String(signal_focus), 2000) : '[No specific focus provided]'}
 
+PROJECT MEMORY - DECISIONS
+${decisionsContext}
 
-    /* ---------------- Prompt Assembly ---------------- */
+PROJECT MEMORY - OPEN QUESTIONS / ASSUMPTIONS
+${memoryItemsContext}
 
-    const modelSpecificConfigLines: string[] = [];
-    let modelSpecificNotes = '';
-
-    if (model === 'WSJF') {
-      modelSpecificConfigLines.push(
-        `- Effort Field: ${effort_field_name}`,
-        `- Max Score Per Factor: ${max_score_per_factor}`,
-        `- Normalize Scores: ${normalize_scores ? 'Yes' : 'No'}`,
-      );
-      modelSpecificNotes = 'Use WSJF-style prioritization signals in the CSV for ranking and tradeoffs.';
-    }
-
-    if (model === 'RICE') {
-      modelSpecificConfigLines.push(
-        `- Reach Column: ${rice_config.reachColumn}`,
-        `- Impact Column: ${rice_config.impactColumn}`,
-        `- Confidence Column: ${rice_config.confidenceColumn}`,
-        `- Effort Column: ${rice_config.effortColumn}`,
-        `- Normalize Scores: ${rice_config.normalizeScores ? 'Yes' : 'No'}`,
-      );
-      modelSpecificNotes = 'Use the provided RICE columns to drive prioritization and recommendations.';
-    }
-
-    if (model === 'MoSCoW') {
-      modelSpecificConfigLines.push(
-        `- MoSCoW Column: ${moscow_config.moscowColumn}`,
-        `- Must maps to: ${moscow_config.categoryMapping?.must ?? 'Must'}`,
-        `- Should maps to: ${moscow_config.categoryMapping?.should ?? 'Should'}`,
-        `- Could maps to: ${moscow_config.categoryMapping?.could ?? 'Could'}`,
-        `- Won't maps to: ${moscow_config.categoryMapping?.wont ?? "Won't"}`,
-      );
-      modelSpecificNotes = 'Prioritize by MoSCoW category ordering and execution sequencing implications.';
-    }
-
-    if (model === 'Value/Effort') {
-      modelSpecificConfigLines.push(
-        `- Value Column: ${value_effort_config.valueColumn}`,
-        `- Effort Column: ${value_effort_config.effortColumn}`,
-        `- Invert Ranking: ${value_effort_config.invertRanking ? 'Yes' : 'No'}`,
-        `- Normalize Scores: ${value_effort_config.normalizeScores ? 'Yes' : 'No'}`,
-      );
-      modelSpecificNotes = 'Use Value/Effort scoring signals and highlight quick wins versus heavier bets.';
-    }
-
-    if (model === 'Custom') {
-      const customFactorLines = custom_config.factors
-        .map((factor: Record<string, unknown>, index: number) => (
-          `  ${index + 1}. ${String(factor.factorName ?? `Factor ${index + 1}`)} | Column: ${String(factor.csvColumn ?? '')} | Weight: ${String(factor.weight ?? '')}`
-        ))
-        .join('\n');
-      modelSpecificConfigLines.push(
-        `- Normalize Scores: ${custom_config.normalizeScores ? 'Yes' : 'No'}`,
-        '- Factors:',
-        customFactorLines,
-      );
-      modelSpecificNotes = 'Apply the custom weighted factor configuration to prioritize backlog items.';
-    }
-
-    let userPrompt = `
-You are reviewing a backlog for ${MODEL_LABELS[model]} prioritization.
-
-The CSV below is provided ONLY so you can derive rankings and insights.
-DO NOT reproduce the dataset or calculations in your output.
-
-BACKLOG DATA (internal analysis only):
-${csv_content}
-
-PRIORITIZATION MODEL:
-- ${MODEL_LABELS[model]}
-
-MODEL CONFIGURATION:
-${modelSpecificConfigLines.join('\n')}
-`;
-
-    if (initiative_name) {
-      userPrompt += `- Initiative Name: ${initiative_name}\n`;
-    }
-
-    if (default_effort_scale) {
-      userPrompt += `- Effort Scale: ${default_effort_scale}\n`;
-    }
-
-    if (notes_context) {
-      userPrompt += `\nCONTEXT FROM PM:\n${notes_context}\n`;
-    }
-
-    if (selected_outputs.length > 0) {
-      userPrompt += `
-REQUESTED OUTPUT EMPHASIS:
-${selected_outputs.map((o: string) => `- ${o}`).join('\n')}
-
-Only include what materially supports these outputs.
-`;
-    }
-
-    userPrompt += `
-OUTPUT LANGUAGE:
-- Write all user-facing markdown output in ${outputLanguageLabel}.
-- Keep CSV column names, product names, acronyms, prioritization model names, markdown syntax, and direct source quotes unchanged.
-- Preserve the exact final heading "## Conflicts with Context Documents".
-`;
-
-    if (
-      selected_outputs.includes('Top N Items Summary') &&
-      top_n_items
-    ) {
-      userPrompt += `\nFocus on the top ${top_n_items} items only.\n`;
-    }
-
-    userPrompt += `\nMODEL-SPECIFIC ANALYSIS DIRECTION:\n${modelSpecificNotes}\n`;
-
-if (projectDocsContext) {
-  userPrompt += `
-
-FOUNDATIONAL PROJECT CONTEXT (from uploaded documents):
-The following documents represent agreed context, constraints, or goals.
-Use them to inform prioritization insights, tradeoffs, and sequencing.
-Do NOT quote verbatim unless necessary.
-
+UPLOADED CONTEXT DOCUMENTS
 ${projectDocsContext}
-`;
-}
 
-if (projectArtifactsContext) {
-  userPrompt += `
-
-PRIOR PROJECT ARTIFACTS (cross-check for consistency and contradictions):
-Use these as supporting project history/context. They may contain prior assumptions that should be validated against current data and uploaded docs.
-
+PRIOR PROJECT ARTIFACTS
 ${projectArtifactsContext}
-`;
-}
 
-    userPrompt += `
+INSTRUCTIONS
+- Synthesize only what the evidence supports.
+- Use the requested outputs to decide where to put emphasis.
+- If user stories or JTBD signals are not well-supported by the evidence, say so plainly instead of inventing them.
+- If something appears contradictory across source material and context docs, call it out in the final conflicts section.
+- If a meaningful detail is still uncertain, place it under "Open Questions & Assumptions".
+`.trim();
 
-REQUIRED FINAL SECTION:
-- End the response with the exact heading: ## Conflicts with Context Documents
-- Compare your recommendations/output against uploaded project context documents and prior project artifacts included above.
-- If there are no conflicts, explicitly write: No conflicts identified
-`;
-
-
-    /* ---------------- OpenAI Call ---------------- */
-
-    const openaiResponse = await fetch(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-5.2-chat-latest',
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: userPrompt },
-          ],
-          max_completion_tokens: 3000,
-        }),
-      }
-    );
+    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-5.2-chat-latest',
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt },
+        ],
+        max_completion_tokens: 3600,
+      }),
+    });
 
     if (!openaiResponse.ok) {
       const err = await openaiResponse.text();
@@ -496,10 +304,11 @@ REQUIRED FINAL SECTION:
     }
 
     const completion = await openaiResponse.json();
-    const output = completion.choices[0].message.content;
-    const durationMs = Date.now() - startTime;
+    const output = completion.choices?.[0]?.message?.content?.trim();
 
-    /* ---------------- Persist Artifact ---------------- */
+    if (!output) {
+      throw new Error('Discovery model returned no output');
+    }
 
     const { data: artifact, error: dbError } = await supabase
       .from('project_artifacts')
@@ -509,35 +318,33 @@ REQUIRED FINAL SECTION:
         artifact_type: 'prioritization',
         artifact_name:
           artifact_name ??
-          `${MODEL_LABELS[model]} Prioritization – ${new Date().toLocaleDateString()}`,
+          `${problem_area || discoveryLabel} Discovery Brief – ${new Date().toLocaleDateString()}`,
         input_data: {
-          schema_version: 1,
-          input_mode: 'csv',
+          schema_version: 2,
+          input_mode: 'discovery',
           selected_outputs,
-          output_language: normalizedOutputLanguage,
+          output_language: output_language === 'spanish' ? 'spanish' : 'english',
           input: {
-            model,
-            initiative_name,
-            effort_field_name,
-            max_score_per_factor,
-            normalize_scores,
-            top_n_items,
-            default_effort_scale,
+            discovery_type,
+            problem_area,
+            target_segment,
+            research_goal,
+            source_material,
             notes_context,
-            rice_config,
-            moscow_config,
-            value_effort_config,
-            custom_config,
+            signal_focus,
+            selected_outputs,
           },
         },
         output_data: output,
         metadata: {
-          input_schema_version: 1,
-          model,
-          output_language: normalizedOutputLanguage,
+          version: 1,
+          discovery_type,
+          problem_area,
+          research_goal,
+          output_language: output_language === 'spanish' ? 'spanish' : 'english',
+          selected_outputs,
           tokens_used: completion.usage?.total_tokens,
-          duration_ms: durationMs,
-          context_documents_used: projectDocsContext ? true : false,
+          context_documents_used: Array.isArray(projectDocs) && projectDocs.length > 0,
         },
         status: 'active',
         advisor_feedback: null,
@@ -547,22 +354,15 @@ REQUIRED FINAL SECTION:
       .single();
 
     if (dbError) {
-      console.error('[DB ERROR]', dbError);
+      console.error('[DISCOVERY DB ERROR]', dbError);
     }
-
-    /* ---------------- Response ---------------- */
 
     return jsonResponse({
       output,
       artifact_id: artifact?.id,
     });
-  } catch (err: any) {
-    console.error('[PRIORITIZATION ERROR]', err);
-    return jsonResponse(
-      {
-        error: err.message ?? 'Unknown error',
-      },
-      500
-    );
+  } catch (error: any) {
+    console.error('[DISCOVERY ERROR]', error);
+    return jsonResponse({ error: error.message ?? 'Unknown error' }, 500);
   }
 });

@@ -7,6 +7,12 @@ import { uploadProjectDocument } from '@/lib/projectDocuments';
 import { supabase } from '@/lib/supabase';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
 import { ProjectMemoryAssistant } from '@/components/ProjectMemoryAssistant';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  CONTEXT_DOCUMENT_TYPES,
+  getContextDocumentTypeConfig,
+  type ContextDocumentType,
+} from '@/lib/contextDocTypes';
 
 interface ContextDocument {
   id: string;
@@ -27,6 +33,8 @@ export default function ContextDocs() {
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [query, setQuery] = useState('');
+  const [uploadDocumentType, setUploadDocumentType] = useState<ContextDocumentType>('fact_source');
+  const [savingDocumentId, setSavingDocumentId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!activeProject) {
@@ -81,7 +89,7 @@ export default function ContextDocs() {
     setIsUploading(true);
     try {
       for (const file of Array.from(files)) {
-        await uploadProjectDocument(activeProject.id, file);
+        await uploadProjectDocument(activeProject.id, file, uploadDocumentType);
       }
       toast.success(files.length === 1 ? 'Document uploaded' : 'Documents uploaded');
       await loadDocuments();
@@ -111,6 +119,36 @@ export default function ContextDocs() {
     toast.success('Document removed');
   }
 
+  async function updateDocumentType(docId: string, nextType: ContextDocumentType) {
+    setSavingDocumentId(docId);
+    try {
+      const { error } = await supabase
+        .from('project_documents')
+        .update({
+          document_type: nextType,
+          doc_type: nextType,
+        })
+        .eq('id', docId);
+
+      if (error) throw error;
+
+      setDocuments((prev) =>
+        prev.map((doc) =>
+          doc.id === docId
+            ? { ...doc, document_type: nextType, doc_type: nextType }
+            : doc
+        )
+      );
+      toast.success('Document type updated');
+    } catch (error: any) {
+      toast.error('Failed to update document type', {
+        description: error?.message ?? 'Please try again.',
+      });
+    } finally {
+      setSavingDocumentId(null);
+    }
+  }
+
   return (
     <PageShell
       eyebrow="Project Knowledge"
@@ -118,21 +156,39 @@ export default function ContextDocs() {
       icon={BookOpen}
       description={`Upload source material, then ask project-wide questions for ${activeProject?.name ?? 'the active project'}.`}
       action={
-        <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-700">
-          <Upload className="h-4 w-4" />
-          {isUploading ? 'Uploading...' : 'Upload Docs'}
-          <input
-            type="file"
-            multiple
-            className="hidden"
-            accept=".pdf,.txt,.md,.csv,.doc,.docx,.xlsx,.xls,.pptx"
-            disabled={isUploading || !activeProject}
-            onChange={(event) => {
-              void handleUpload(event.target.files);
-              event.currentTarget.value = '';
-            }}
-          />
-        </label>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Select
+            value={uploadDocumentType}
+            onValueChange={(value) => setUploadDocumentType(value as ContextDocumentType)}
+          >
+            <SelectTrigger className="w-full min-w-[220px] border-slate-200 bg-white sm:w-[220px]">
+              <SelectValue placeholder="Document type" />
+            </SelectTrigger>
+            <SelectContent>
+              {CONTEXT_DOCUMENT_TYPES.map((type) => (
+                <SelectItem key={type.value} value={type.value}>
+                  {type.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-700">
+            <Upload className="h-4 w-4" />
+            {isUploading ? 'Uploading...' : 'Upload Docs'}
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              accept=".pdf,.txt,.md,.csv,.doc,.docx,.xlsx,.xls,.pptx"
+              disabled={isUploading || !activeProject}
+              onChange={(event) => {
+                void handleUpload(event.target.files);
+                event.currentTarget.value = '';
+              }}
+            />
+          </label>
+        </div>
       }
     >
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
@@ -153,6 +209,9 @@ export default function ContextDocs() {
                 <h2 className="m-0 text-lg font-semibold text-slate-950">Documents</h2>
                 <p className="text-sm text-slate-600">
                   {documents.length} active document{documents.length === 1 ? '' : 's'}
+                </p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Current upload type: {getContextDocumentTypeConfig(uploadDocumentType).label}
                 </p>
               </div>
               <BadgeLike>{searchableDocuments.length} searchable</BadgeLike>
@@ -194,7 +253,11 @@ export default function ContextDocs() {
                           </h3>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                             <span>Uploaded {new Date(doc.created_at).toLocaleDateString()}</span>
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
+                            <span
+                              className={`rounded-full px-2 py-0.5 font-medium ${getContextDocumentTypeConfig(
+                                doc.document_type ?? doc.doc_type
+                              ).badgeClass}`}
+                            >
                               {getDocumentTypeLabel(doc)}
                             </span>
                             {(doc.extracted_text ?? '').trim() ? (
@@ -218,6 +281,35 @@ export default function ContextDocs() {
                         Remove
                       </button>
                     </div>
+
+                    <div className="mt-4 grid gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-center">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Source weighting
+                        </p>
+                        <p className="mt-1 text-sm text-slate-600">
+                          {getContextDocumentTypeConfig(doc.document_type ?? doc.doc_type).description}
+                        </p>
+                      </div>
+                      <Select
+                        value={(doc.document_type ?? doc.doc_type ?? 'draft_working_doc') as ContextDocumentType}
+                        onValueChange={(value) =>
+                          void updateDocumentType(doc.id, value as ContextDocumentType)
+                        }
+                        disabled={savingDocumentId === doc.id}
+                      >
+                        <SelectTrigger className="w-full bg-white">
+                          <SelectValue placeholder="Document type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CONTEXT_DOCUMENT_TYPES.map((type) => (
+                            <SelectItem key={type.value} value={type.value}>
+                              {type.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -228,7 +320,7 @@ export default function ContextDocs() {
         <ProjectMemoryAssistant
           activeProject={activeProject ? { id: activeProject.id, name: activeProject.name } : null}
           title="Ask Project Memory"
-          description="Search context docs, generated artifacts, tasks, and saved decisions with citations."
+          description="Search context docs, generated artifacts, tasks, and saved decisions with source-aware weighting."
           bodyHeightClass="h-[660px]"
           samplePrompts={[
             'Show me all user stories we generated',
@@ -243,7 +335,7 @@ export default function ContextDocs() {
 }
 
 function getDocumentTypeLabel(doc: ContextDocument) {
-  return doc.document_type ?? doc.doc_type ?? 'Context';
+  return getContextDocumentTypeConfig(doc.document_type ?? doc.doc_type).label;
 }
 
 function ContextMetric({

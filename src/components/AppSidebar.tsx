@@ -11,17 +11,18 @@ import {
   FolderOpen,
   Home,
   LayoutDashboard,
-  ListOrdered,
   LockKeyhole,
   LogOut,
   Megaphone,
   MessageSquareText,
+  Orbit,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   Settings,
   ShieldCheck,
   UserCircle,
+  Compass,
 } from 'lucide-react';
 import Logo from '@/assets/branding/product_workbench_logo.png';
 import MiniLogo from '@/assets/branding/minilogo.png';
@@ -55,6 +56,7 @@ import { toast } from 'sonner';
 const primaryNav = [
   { label: 'Home', path: '/', icon: Home },
   { label: 'Project Memory', path: '/dashboard', icon: FileArchive },
+  { label: 'Replay', path: '/replay', icon: Orbit },
   { label: 'Tasks', path: '/tasks', icon: ClipboardList },
 ];
 
@@ -62,7 +64,7 @@ const moduleNav = [
   { label: 'Project Notes', path: '/meetings', icon: MessageSquareText },
   { label: 'Product Docs', path: '/documentation', icon: FileText },
   { label: 'Release Comms', path: '/releases', icon: Megaphone },
-  { label: 'Prioritization', path: '/prioritization', icon: ListOrdered },
+  { label: 'Discovery', path: '/prioritization', icon: Compass },
 ];
 
 export function AppSidebar() {

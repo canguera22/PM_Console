@@ -13,6 +13,7 @@ export async function uploadProjectDocument(
       project_id: projectId,
       name: file.name,
       doc_type: docType ?? null,
+      document_type: docType ?? null,
       storage_path: '',
       mime_type: file.type,
       size_bytes: file.size,
@@ -72,6 +73,7 @@ export async function uploadProjectDocument(
       metadata: {
         ...baseMetadata,
         ...extractionMetadata,
+        document_type: docType ?? null,
       },
     })
     .eq('id', docRow.id);

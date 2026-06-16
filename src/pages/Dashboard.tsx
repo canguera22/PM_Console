@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import {
   FileText,
   Megaphone,
-  ListOrdered,
+  Compass,
   ArrowRight,
   Brain,
   MessageSquareText,
@@ -83,15 +83,15 @@ export default function Dashboard() {
     },
     {
       id: 'prioritization',
-      title: 'Backlog Prioritization',
+      title: 'Discovery',
       description:
-        'Score and rank your backlog using WSJF and other prioritization models',
-      icon: ListOrdered,
+        'Synthesize feedback, research, and raw signals into themes, opportunities, and next moves',
+      icon: Compass,
       path: '/prioritization',
-      hasPMAdvisor: false,
-      eyebrow: 'Roadmap choices',
+      hasPMAdvisor: true,
+      eyebrow: 'Signal synthesis',
       accent: 'amber',
-      cta: 'Rank backlog',
+      cta: 'Shape discovery',
     },
   ];
 
@@ -138,8 +138,10 @@ export default function Dashboard() {
   const getArtifactDisplayName = (artifact: ProjectArtifact) => {
     if (artifact.artifact_type === 'prioritization') {
       return (
-        artifact.input_data?.initiative_name?.trim() ||
-        'Untitled Backlog'
+        artifact.artifact_name ||
+        (artifact.input_data?.input as Record<string, any> | undefined)?.problem_area?.trim?.() ||
+        artifact.input_data?.problem_area?.trim?.() ||
+        'Untitled Discovery Brief'
       );
     }
 

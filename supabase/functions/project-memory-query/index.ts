@@ -22,6 +22,17 @@ type MemoryCitation = {
 
 type MemoryItem = MemoryCitation & {
   content: string;
+  weight?: number;
+};
+
+const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; searchWeight: number }> = {
+  fact_source: { label: 'Fact Source', searchWeight: 1.45 },
+  user_stories: { label: 'User Stories', searchWeight: 1.3 },
+  confirmed_decisions: { label: 'Confirmed Decisions', searchWeight: 1.35 },
+  prd_spec: { label: 'PRD / Spec', searchWeight: 1.2 },
+  meeting_notes: { label: 'Meeting Notes', searchWeight: 1.05 },
+  research_reference: { label: 'Research / Reference', searchWeight: 1.1 },
+  draft_working_doc: { label: 'Draft Working Doc', searchWeight: 0.9 },
 };
 
 function corsHeaders() {
@@ -175,7 +186,7 @@ function artifactBadgeLabel(artifactType: string) {
     case 'release_communications':
       return 'Release Comms';
     case 'prioritization':
-      return 'Prioritization';
+      return 'Discovery';
     default:
       return 'Artifact';
   }
@@ -185,17 +196,23 @@ function buildDocumentItems(documents: Array<Record<string, unknown>>, terms: st
   return documents.flatMap((document) => {
     const text = String(document.extracted_text || '').trim();
     if (!text) return [];
+    const documentType = String(document.document_type || document.doc_type || '');
+    const config = DOCUMENT_TYPE_CONFIG[documentType] ?? {
+      label: 'Context Doc',
+      searchWeight: 1,
+    };
 
     return chunkText(text, 1100).map((chunk, index) => ({
       id: `${document.id}-chunk-${index}`,
       kind: 'document' as const,
       title: String(document.name || 'Context Document'),
       quote: makeQuote(chunk, terms),
-      content: chunk,
+      content: `Document type: ${config.label}\n${chunk}`,
       score: 0,
-      route: '/context-docs',
+      route: '/context',
       routeLabel: 'Open Context Docs',
-      badgeLabel: 'Context Doc',
+      badgeLabel: config.label,
+      weight: config.searchWeight,
     }));
   });
 }
@@ -354,7 +371,7 @@ serve(async (req) => {
     const [documentsResult, artifactsResult, tasksResult, decisionsResult, memoryItemsResult] = await Promise.all([
       supabase
         .from('project_documents')
-        .select('id, name, extracted_text')
+        .select('id, name, extracted_text, document_type, doc_type')
         .eq('project_id', project_id)
         .eq('status', 'active')
         .not('extracted_text', 'is', null),
@@ -411,7 +428,7 @@ serve(async (req) => {
     ]
       .map((item) => ({
         ...item,
-        score: scoreText(`${item.title}\n${item.content}`, terms),
+        score: scoreText(`${item.title}\n${item.content}`, terms) * (item.weight ?? 1),
       }))
       .filter((item) => item.score > 0);
 

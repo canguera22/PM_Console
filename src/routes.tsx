@@ -7,10 +7,11 @@ import ProjectDashboard from "./pages/ProjectDashboard";
 import MeetingIntelligence from "./pages/MeetingIntelligence";
 import ProductDocumentation from "./pages/ProductDocumentation";
 import ReleaseCommunications from "./pages/ReleaseCommunications";
-import Prioritization from "./pages/Prioritization";
+import Discovery from "./pages/Prioritization";
 import Tasks from "./pages/Tasks";
 import ContextDocs from "./pages/ContextDocs";
 import ProjectDetails from "./pages/ProjectDetails";
+import ProjectReplay from "./pages/ProjectReplay";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import NotFound from "./pages/NotFound";
@@ -48,6 +49,10 @@ const routes = [
             element: <ContextDocs />,
           },
           {
+            path: "replay",
+            element: <ProjectReplay />,
+          },
+          {
             path: "project",
             element: <ProjectDetails />,
           },
@@ -65,7 +70,7 @@ const routes = [
           },
           {
             path: "prioritization",
-            element: <Prioritization />,
+            element: <Discovery />,
           },
           {
             path: "*",

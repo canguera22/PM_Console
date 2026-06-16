@@ -96,8 +96,8 @@ function moduleStructureInstruction(moduleType: string) {
       ].join('\n');
     case 'prioritization':
       return [
-        'Preserve the prioritization model framing and selected output emphasis.',
-        'Do not alter rankings or scoring unless the advisor feedback is supported by the original inputs.',
+        'Preserve the discovery brief structure and selected output emphasis.',
+        'Do not turn assumptions into facts or invent user stories, evidence, or certainty not supported by the original inputs.',
       ].join('\n');
     case 'meeting_intelligence':
       return [
@@ -268,4 +268,3 @@ Return the revised artifact only.
     });
   }
 });
-

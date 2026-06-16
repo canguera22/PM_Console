@@ -1,37 +1,23 @@
 import { supabase } from './supabase';
-import {
-  PrioritizationCalculationInput,
-  PrioritizationCalculationResult,
-  WSJFCalculationInput,
-  WSJFCalculationResult,
-} from '@/types/prioritization';
+import type { DiscoveryRequestInput, DiscoveryResult } from '@/types/discovery';
 import { getFunctionErrorMessage } from './function-errors';
 
-type PrioritizationEdgeResponse = {
+type DiscoveryEdgeResponse = {
   output: string;
   artifact_id?: string;
   session_id?: string;
 };
 
-export async function calculateWSJF(
-  input: WSJFCalculationInput
-): Promise<WSJFCalculationResult> {
-  return calculatePrioritization({
-    ...input,
-    model: 'WSJF',
-  });
-}
-
-export async function calculatePrioritization(
-  input: PrioritizationCalculationInput
-): Promise<PrioritizationCalculationResult> {
-  const { data, error } = await supabase.functions.invoke<PrioritizationEdgeResponse>('prioritization', {
+export async function generateDiscovery(
+  input: DiscoveryRequestInput
+): Promise<DiscoveryResult> {
+  const { data, error } = await supabase.functions.invoke<DiscoveryEdgeResponse>('prioritization', {
     body: input,
   });
 
   if (error) {
-    console.error('Error calling prioritization edge function:', error);
-    const message = await getFunctionErrorMessage(error, 'Failed to calculate prioritization');
+    console.error('Error calling discovery edge function:', error);
+    const message = await getFunctionErrorMessage(error, 'Failed to generate discovery synthesis');
     throw new Error(message);
   }
 
@@ -40,4 +26,10 @@ export async function calculatePrioritization(
     artifact_id: data.artifact_id,
     session_id: data.session_id,
   };
+}
+
+export async function calculatePrioritization(
+  input: DiscoveryRequestInput
+): Promise<DiscoveryResult> {
+  return generateDiscovery(input);
 }
