@@ -9,6 +9,8 @@ import ProductDocumentation from "./pages/ProductDocumentation";
 import ReleaseCommunications from "./pages/ReleaseCommunications";
 import Discovery from "./pages/Prioritization";
 import Tasks from "./pages/Tasks";
+import Features from "./pages/Features";
+import FeatureDetails from "./pages/FeatureDetails";
 import ContextDocs from "./pages/ContextDocs";
 import ProjectDetails from "./pages/ProjectDetails";
 import ProjectReplay from "./pages/ProjectReplay";
@@ -43,6 +45,14 @@ const routes = [
           {
             path: "tasks",
             element: <Tasks />,
+          },
+          {
+            path: "features",
+            element: <Features />,
+          },
+          {
+            path: "features/:featureId",
+            element: <FeatureDetails />,
           },
           {
             path: "context",

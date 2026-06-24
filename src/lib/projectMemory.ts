@@ -28,6 +28,8 @@ interface ProjectMemoryQueryInput {
   project_id: string;
   project_name?: string;
   query: string;
+  feature_id?: string;
+  feature_name?: string;
 }
 
 export async function queryProjectMemory(

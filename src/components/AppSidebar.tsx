@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Home,
   LayoutDashboard,
+  Layers3,
   LockKeyhole,
   LogOut,
   Megaphone,
@@ -56,6 +57,7 @@ import { toast } from 'sonner';
 const primaryNav = [
   { label: 'Home', path: '/', icon: Home },
   { label: 'Project Memory', path: '/dashboard', icon: FileArchive },
+  { label: 'Features', path: '/features', icon: Layers3 },
   { label: 'Replay', path: '/replay', icon: Orbit },
   { label: 'Tasks', path: '/tasks', icon: ClipboardList },
 ];
@@ -249,7 +251,10 @@ export function AppSidebar() {
                   key={item.label}
                   icon={item.icon}
                   label={item.label}
-                  active={location.pathname === item.path}
+                  active={
+                    location.pathname === item.path ||
+                    (item.path !== '/' && location.pathname.startsWith(`${item.path}/`))
+                  }
                   collapsed={isCollapsed}
                   onClick={() => navigateTo(item.path)}
                 />

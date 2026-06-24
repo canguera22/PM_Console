@@ -32,7 +32,6 @@ import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { Project } from '@/types/project';
 import { ProjectTaskPanel } from '@/components/ProjectTaskPanel';
 import { PageShell } from '@/components/PageShell';
-import { ProjectMemoryAssistant } from '@/components/ProjectMemoryAssistant';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -137,10 +136,15 @@ export default function Dashboard() {
   // -----------------------------
   const getArtifactDisplayName = (artifact: ProjectArtifact) => {
     if (artifact.artifact_type === 'prioritization') {
+      const nestedInput = artifact.input_data?.input as
+        | { problem_area?: string }
+        | undefined;
       return (
         artifact.artifact_name ||
-        (artifact.input_data?.input as Record<string, any> | undefined)?.problem_area?.trim?.() ||
-        artifact.input_data?.problem_area?.trim?.() ||
+        nestedInput?.problem_area?.trim?.() ||
+        (typeof artifact.input_data?.problem_area === 'string'
+          ? artifact.input_data.problem_area.trim()
+          : '') ||
         'Untitled Discovery Brief'
       );
     }
@@ -261,21 +265,6 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         )}
-
-        <div className="mb-6">
-          <ProjectMemoryAssistant
-            activeProject={activeProject ? { id: activeProject.id, name: activeProject.name } : null}
-            title="Ask Project Memory"
-            description="Pull answers from this project's docs, artifacts, tasks, and extracted decisions without hunting around the workspace."
-            bodyHeightClass="h-[440px]"
-            samplePrompts={[
-              'Show me all user stories we generated',
-              'What decisions have we made about California subscribers?',
-              'Which open tasks are tied to release communications?',
-            ]}
-            emptyStateCopy="Ask anything about this project. I will search saved notes, artifacts, tasks, and decisions, then point you to the source."
-          />
-        </div>
 
         <div className="grid gap-6 xl:grid-cols-[minmax(320px,0.78fr)_minmax(520px,1.22fr)] xl:items-start">
           {/* ================= MODULE LAUNCHER ================= */}

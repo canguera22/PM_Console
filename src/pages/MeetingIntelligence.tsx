@@ -31,7 +31,7 @@ import { useSearchParams } from 'react-router-dom';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { ArtifactActions } from '@/components/ArtifactActions';
 import { createProjectTask } from '@/lib/projectTasks';
-import { extractActionItemsFromMarkdown } from '@/lib/actionItems';
+import { extractActionItemsFromMarkdown, isPlaceholderActionItem } from '@/lib/actionItems';
 import { PROJECT_TASK_MODULE_LABELS, ProjectTaskModule } from '@/types/project-tasks';
 import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 
@@ -141,7 +141,9 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       transcript: sourceText,
       output: a.output_data ?? null,
       action_items: Array.isArray(metadata.action_items)
-        ? (metadata.action_items as ExtractedActionItem[])
+        ? (metadata.action_items as ExtractedActionItem[]).filter(
+            (item) => !isPlaceholderActionItem(item)
+          )
         : [],
       decisions: Array.isArray(metadata.decisions)
         ? (metadata.decisions as ExtractedDecision[])
@@ -273,7 +275,7 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       console.log('✨ [Success] Received AI-generated output', { outputLength: result.output.length });
       const proposedActionItems =
         result.action_items && result.action_items.length > 0
-          ? result.action_items
+          ? result.action_items.filter((item) => !isPlaceholderActionItem(item))
           : extractActionItemsFromMarkdown(result.output);
       setCurrentOutput(result.output);
       setCurrentArtifactId(result.artifact_id ?? null);

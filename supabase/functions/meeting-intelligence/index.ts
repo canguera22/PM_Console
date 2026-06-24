@@ -387,6 +387,8 @@ function shouldSkipActionLine(line: string) {
   return (
     /^-{3,}$/.test(plain) ||
     /^\(?no owners?\b/i.test(plain) ||
+    /^no\b.*\b(action items?|follow-?ups?|tasks?)\b.*\b(identified|found|noted|captured|provided)\b/i.test(plain) ||
+    /^no explicit\b.*\b(action items?|follow-?ups?|tasks?)\b/i.test(plain) ||
     /^none identified/i.test(plain) ||
     /^n\/a$/i.test(plain)
   );

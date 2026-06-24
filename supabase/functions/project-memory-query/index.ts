@@ -192,11 +192,60 @@ function artifactBadgeLabel(artifactType: string) {
   }
 }
 
-function buildDocumentItems(documents: Array<Record<string, unknown>>, terms: string[]): MemoryItem[] {
+function roleWeight(role: string | undefined) {
+  switch (role) {
+    case 'source':
+      return 1.8;
+    case 'reference':
+      return 1.45;
+    case 'background':
+      return 1.15;
+    default:
+      return 1;
+  }
+}
+
+function buildFeatureItem(feature: Record<string, unknown> | null, projectName: string | undefined): MemoryItem[] {
+  if (!feature) return [];
+
+  const name = String(feature.name || 'Feature');
+  const description = String(feature.description || '').trim();
+  const priority = String(feature.priority || 'medium');
+  const content = [
+    `Project: ${projectName || '(not provided)'}`,
+    `Feature: ${name}`,
+    `Priority: ${priority}`,
+    description ? `Description: ${description}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return [
+    {
+      id: String(feature.id),
+      kind: 'artifact' as const,
+      title: name,
+      quote: description || `Feature priority: ${priority}`,
+      content,
+      score: 0,
+      route: `/features/${String(feature.id)}`,
+      routeLabel: 'Open Feature',
+      badgeLabel: 'Feature Scope',
+      weight: 1.9,
+    },
+  ];
+}
+
+function buildDocumentItems(
+  documents: Array<Record<string, unknown>>,
+  terms: string[],
+  linkedDocumentRoles = new Map<string, string>()
+): MemoryItem[] {
   return documents.flatMap((document) => {
     const text = String(document.extracted_text || '').trim();
     if (!text) return [];
     const documentType = String(document.document_type || document.doc_type || '');
+    const linkedRole = linkedDocumentRoles.get(String(document.id));
     const config = DOCUMENT_TYPE_CONFIG[documentType] ?? {
       label: 'Context Doc',
       searchWeight: 1,
@@ -207,33 +256,39 @@ function buildDocumentItems(documents: Array<Record<string, unknown>>, terms: st
       kind: 'document' as const,
       title: String(document.name || 'Context Document'),
       quote: makeQuote(chunk, terms),
-      content: `Document type: ${config.label}\n${chunk}`,
+      content: `${linkedRole ? `Feature context role: ${linkedRole}\n` : ''}Document type: ${config.label}\n${chunk}`,
       score: 0,
       route: '/context',
       routeLabel: 'Open Context Docs',
-      badgeLabel: config.label,
-      weight: config.searchWeight,
+      badgeLabel: linkedRole ? `Feature ${linkedRole}` : config.label,
+      weight: config.searchWeight * roleWeight(linkedRole),
     }));
   });
 }
 
-function buildArtifactItems(artifacts: Array<Record<string, unknown>>, terms: string[]): MemoryItem[] {
+function buildArtifactItems(
+  artifacts: Array<Record<string, unknown>>,
+  terms: string[],
+  linkedArtifactRoles = new Map<string, string>()
+): MemoryItem[] {
   return artifacts.flatMap((artifact) => {
     const output = String(artifact.output_data || '').trim();
     if (!output) return [];
 
     const artifactType = String(artifact.artifact_type || 'artifact');
     const artifactId = String(artifact.id || '');
+    const linkedRole = linkedArtifactRoles.get(artifactId);
     return chunkText(output, 1200).map((chunk, index) => ({
       id: `${artifactId}-chunk-${index}`,
       kind: 'artifact' as const,
       title: String(artifact.artifact_name || artifactType.replace(/_/g, ' ')),
       quote: makeQuote(chunk, terms),
-      content: chunk,
+      content: linkedRole ? `Feature context role: ${linkedRole}\n${chunk}` : chunk,
       score: 0,
       route: artifactRoute(artifactType, artifactId),
       routeLabel: 'Open Artifact',
-      badgeLabel: artifactBadgeLabel(artifactType),
+      badgeLabel: linkedRole ? `Feature ${linkedRole}` : artifactBadgeLabel(artifactType),
+      weight: roleWeight(linkedRole),
     }));
   });
 }
@@ -349,7 +404,7 @@ serve(async (req) => {
   }
 
   try {
-    const { project_id, project_name, query } = await req.json();
+    const { project_id, project_name, query, feature_id, feature_name } = await req.json();
 
     if (!project_id || !isValidUUID(project_id)) {
       return new Response(JSON.stringify({ error: 'project_id must be a valid UUID' }), {
@@ -365,10 +420,49 @@ serve(async (req) => {
       });
     }
 
+    if (feature_id && !isValidUUID(String(feature_id))) {
+      return new Response(JSON.stringify({ error: 'feature_id must be a valid UUID' }), {
+        status: 400,
+        headers: corsHeaders(),
+      });
+    }
+
     const accessError = await requireProjectAccess(req, project_id);
     if (accessError) return accessError;
 
-    const [documentsResult, artifactsResult, tasksResult, decisionsResult, memoryItemsResult] = await Promise.all([
+    const [
+      featureResult,
+      featureArtifactLinksResult,
+      featureDocumentLinksResult,
+      documentsResult,
+      artifactsResult,
+      tasksResult,
+      decisionsResult,
+      memoryItemsResult,
+    ] = await Promise.all([
+      feature_id
+        ? supabase
+            .from('project_features')
+            .select('id, name, description, priority, status, project_id')
+            .eq('id', feature_id)
+            .eq('project_id', project_id)
+            .eq('status', 'active')
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      feature_id
+        ? supabase
+            .from('feature_artifacts')
+            .select('artifact_id, role')
+            .eq('feature_id', feature_id)
+            .eq('project_id', project_id)
+        : Promise.resolve({ data: [], error: null }),
+      feature_id
+        ? supabase
+            .from('feature_documents')
+            .select('document_id, role')
+            .eq('feature_id', feature_id)
+            .eq('project_id', project_id)
+        : Promise.resolve({ data: [], error: null }),
       supabase
         .from('project_documents')
         .select('id, name, extracted_text, document_type, doc_type')
@@ -407,9 +501,21 @@ serve(async (req) => {
         .limit(120),
     ]);
 
-    if (documentsResult.error || artifactsResult.error || tasksResult.error || decisionsResult.error || memoryItemsResult.error) {
+    if (
+      featureResult.error ||
+      featureArtifactLinksResult.error ||
+      featureDocumentLinksResult.error ||
+      documentsResult.error ||
+      artifactsResult.error ||
+      tasksResult.error ||
+      decisionsResult.error ||
+      memoryItemsResult.error
+    ) {
       throw new Error(
-        documentsResult.error?.message ||
+        featureResult.error?.message ||
+          featureArtifactLinksResult.error?.message ||
+          featureDocumentLinksResult.error?.message ||
+          documentsResult.error?.message ||
           artifactsResult.error?.message ||
           tasksResult.error?.message ||
           decisionsResult.error?.message ||
@@ -418,10 +524,30 @@ serve(async (req) => {
       );
     }
 
+    if (feature_id && !featureResult.data) {
+      return new Response(JSON.stringify({ error: 'Feature not found for this project' }), {
+        status: 404,
+        headers: corsHeaders(),
+      });
+    }
+
     const terms = tokenize(query);
+    const linkedArtifactRoles = new Map<string, string>(
+      (featureArtifactLinksResult.data ?? []).map((link: Record<string, unknown>) => [
+        String(link.artifact_id),
+        String(link.role || 'reference'),
+      ])
+    );
+    const linkedDocumentRoles = new Map<string, string>(
+      (featureDocumentLinksResult.data ?? []).map((link: Record<string, unknown>) => [
+        String(link.document_id),
+        String(link.role || 'reference'),
+      ])
+    );
     const memoryItems = [
-      ...buildDocumentItems(documentsResult.data ?? [], terms),
-      ...buildArtifactItems(artifactsResult.data ?? [], terms),
+      ...buildFeatureItem(featureResult.data, project_name),
+      ...buildDocumentItems(documentsResult.data ?? [], terms, linkedDocumentRoles),
+      ...buildArtifactItems(artifactsResult.data ?? [], terms, linkedArtifactRoles),
       ...buildTaskItems(tasksResult.data ?? []),
       ...buildDecisionItems(decisionsResult.data ?? []),
       ...buildProjectMemoryItems(memoryItemsResult.data ?? []),
@@ -480,6 +606,7 @@ Answer only from the provided project evidence.
 
 Rules:
 - Be concise and directly answer the user's question.
+- If a feature scope is provided, prioritize evidence marked as feature context and the feature overview.
 - If the evidence is incomplete, say what is known and what is missing.
 - Do not invent facts, dates, decisions, user stories, owners, scope, assumptions, or answers to open questions.
 - If the user asks for "all" relevant items, summarize the known set from the evidence provided.
@@ -488,6 +615,7 @@ Rules:
 - Return plain markdown only.`;
 
     const userPrompt = `Project: ${project_name || '(not provided)'}
+Scope: ${feature_id ? `Feature - ${feature_name || String(featureResult.data?.name || feature_id)}` : 'All Project'}
 
 User question:
 ${query}

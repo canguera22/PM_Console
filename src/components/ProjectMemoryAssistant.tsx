@@ -4,6 +4,7 @@ import { Brain, ExternalLink, MessageSquare, Search, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { queryProjectMemory, type ProjectMemoryCitation } from '@/lib/projectMemory';
 
 interface ActiveProjectLike {
@@ -25,6 +26,10 @@ interface ProjectMemoryAssistantProps {
   samplePrompts?: string[];
   bodyHeightClass?: string;
   emptyStateCopy?: string;
+  scopeOptions?: Array<{ id: string; label: string; featureId?: string }>;
+  selectedScopeId?: string;
+  onSelectedScopeChange?: (scopeId: string) => void;
+  embedded?: boolean;
 }
 
 export function ProjectMemoryAssistant({
@@ -34,24 +39,38 @@ export function ProjectMemoryAssistant({
   samplePrompts = [],
   bodyHeightClass = 'h-[660px]',
   emptyStateCopy = 'Ask anything about this project. I will answer from saved project material and show where the answer came from.',
+  scopeOptions = [],
+  selectedScopeId,
+  onSelectedScopeChange,
+  embedded = false,
 }: ProjectMemoryAssistantProps) {
   const navigate = useNavigate();
   const [chatInput, setChatInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const hasActiveProject = Boolean(activeProject);
+
+  const selectedScope = useMemo(
+    () => scopeOptions.find((scope) => scope.id === selectedScopeId),
+    [scopeOptions, selectedScopeId]
+  );
+
+  const scopeLabel = selectedScope?.label ?? 'All Project';
 
   useEffect(() => {
     setMessages([
       {
-        id: `intro-${activeProject?.id ?? 'none'}`,
+        id: `intro-${activeProject?.id ?? 'none'}-${selectedScopeId ?? 'project'}`,
         role: 'assistant',
-        content: activeProject
-          ? emptyStateCopy
+        content: hasActiveProject
+          ? selectedScope?.featureId
+            ? `${emptyStateCopy}\n\nCurrent scope: ${scopeLabel}.`
+            : emptyStateCopy
           : 'Choose an active project to search project memory.',
       },
     ]);
     setChatInput('');
-  }, [activeProject?.id, emptyStateCopy]);
+  }, [activeProject?.id, emptyStateCopy, hasActiveProject, scopeLabel, selectedScope?.featureId, selectedScopeId]);
 
   const promptCountLabel = useMemo(() => {
     if (!activeProject) return 'No project selected';
@@ -77,6 +96,8 @@ export function ProjectMemoryAssistant({
         project_id: activeProject.id,
         project_name: activeProject.name,
         query: question,
+        feature_id: selectedScope?.featureId,
+        feature_name: selectedScope?.featureId ? selectedScope.label : undefined,
       });
 
       const assistantMessage: ChatMessage = {
@@ -87,9 +108,9 @@ export function ProjectMemoryAssistant({
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error('Project memory could not answer that yet', {
-        description: error?.message ?? 'Please try again.',
+        description: error instanceof Error ? error.message : 'Please try again.',
       });
       setMessages((prev) => [
         ...prev,
@@ -106,7 +127,7 @@ export function ProjectMemoryAssistant({
   }
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <section className={embedded ? 'overflow-hidden bg-white' : 'overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm'}>
       <div className="border-b border-slate-200 p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-center gap-3">
@@ -119,9 +140,25 @@ export function ProjectMemoryAssistant({
             </div>
           </div>
           <span className="inline-flex w-fit items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-            {promptCountLabel}
+            {selectedScope?.featureId ? `Feature: ${scopeLabel}` : promptCountLabel}
           </span>
         </div>
+        {scopeOptions.length > 1 && onSelectedScopeChange ? (
+          <div className="mt-4 max-w-sm">
+            <Select value={selectedScopeId ?? 'project'} onValueChange={onSelectedScopeChange}>
+              <SelectTrigger className="border-slate-200 bg-white">
+                <SelectValue placeholder="Choose scope" />
+              </SelectTrigger>
+              <SelectContent>
+                {scopeOptions.map((scope) => (
+                  <SelectItem key={scope.id} value={scope.id}>
+                    {scope.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
       </div>
 
       <div className={`flex flex-col ${bodyHeightClass}`}>

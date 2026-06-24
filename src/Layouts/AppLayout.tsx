@@ -1,5 +1,6 @@
 import { Outlet } from "react-router-dom";
 import { AppSidebar } from "@/components/AppSidebar";
+import { FloatingProjectAssistant } from "@/components/FloatingProjectAssistant";
 
 const AppLayout = () => {
   return (
@@ -8,6 +9,7 @@ const AppLayout = () => {
       <main className="min-w-0 flex-1">
         <Outlet />
       </main>
+      <FloatingProjectAssistant />
     </div>
   );
 };
