@@ -40,7 +40,9 @@ import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { callPMAdvisorAgent } from '@/lib/pm-advisor';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { ArtifactActions } from '@/components/ArtifactActions';
+import { FeatureAssociationSelect } from '@/components/FeatureAssociationSelect';
 import { reviseArtifactWithAdvisor } from '@/lib/artifact-revision';
+import { linkFeatureArtifact } from '@/lib/projectFeatures';
 import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 
 
@@ -237,6 +239,7 @@ export default function ReleaseCommunications() {
   const [knownRisks, setKnownRisks] = useState('');
   const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('english');
   const [selectedOutputs, setSelectedOutputs] = useState<OutputType[]>([]);
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
 
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
@@ -544,6 +547,21 @@ export default function ReleaseCommunications() {
       setAdvisorOutput('');
 
       setCurrentArtifactId(result.artifact_id ?? null);
+
+      if (selectedFeatureId && result.artifact_id) {
+        try {
+          await linkFeatureArtifact(activeProject.id, selectedFeatureId, result.artifact_id, 'source');
+        } catch (linkError: unknown) {
+          toast({
+            title: 'Feature link skipped',
+            description:
+              linkError instanceof Error
+                ? linkError.message
+                : 'Release documentation was saved, but could not be linked to the selected feature.',
+            variant: 'destructive',
+          });
+        }
+      }
 
       await loadSessions();
 
@@ -1159,6 +1177,13 @@ setActiveSectionId(sections[0]?.id ?? null);
               </div>
 
               <Separator />
+
+              <FeatureAssociationSelect
+                projectId={activeProject?.id}
+                value={selectedFeatureId}
+                onChange={setSelectedFeatureId}
+                disabled={isGenerating || isParsingCsv}
+              />
 
               <Button onClick={handleGenerate} disabled={!canGenerate || isGenerating} className="w-full" size="lg">
                 {isGenerating ? (

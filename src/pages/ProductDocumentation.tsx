@@ -24,7 +24,9 @@ import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { ArtifactActions } from '@/components/ArtifactActions';
+import { FeatureAssociationSelect } from '@/components/FeatureAssociationSelect';
 import { reviseArtifactWithAdvisor } from '@/lib/artifact-revision';
+import { linkFeatureArtifact } from '@/lib/projectFeatures';
 import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
 import Papa from 'papaparse';
 import { supabase } from '@/lib/supabase';
@@ -440,6 +442,7 @@ const handleDrop = useCallback((e: React.DragEvent) => {
 
   const [selectedOutputs, setSelectedOutputs] = useState<OutputKey[]>([]);
   const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('english');
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const csvAllowed =
   selectedOutputs.length === 1 &&
   selectedOutputs.includes(OUTPUT_KEYS.USER_STORIES);
@@ -833,6 +836,19 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
         setCurrentSessionId(result.artifact_id);
         setCurrentArtifactVersion(1);
         setLastModifiedBy('agent');
+
+        if (selectedFeatureId) {
+          try {
+            await linkFeatureArtifact(activeProject.id, selectedFeatureId, result.artifact_id, 'source');
+          } catch (linkError: unknown) {
+            toast.warning('Documentation generated, but feature linking failed', {
+              description:
+                linkError instanceof Error
+                  ? linkError.message
+                  : 'You can still link this artifact from the feature workspace.',
+            });
+          }
+        }
       }
 
 
@@ -1650,6 +1666,14 @@ console.log('🧪 hasCsvInput (frontend)', hasCsvInputFrontend);
 
                   {/* Sticky footer */}
                         <div className="border-t border-[#E5E7EB] p-4">
+                          <div className="mb-3">
+                            <FeatureAssociationSelect
+                              projectId={activeProject?.id}
+                              value={selectedFeatureId}
+                              onChange={setSelectedFeatureId}
+                              disabled={isGenerating}
+                            />
+                          </div>
                           <Button
                             className="w-full"
                             size="lg"

@@ -30,7 +30,9 @@ import { ErrorDisplay } from '@/components/ErrorDisplay';
 import { useSearchParams } from 'react-router-dom';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { ArtifactActions } from '@/components/ArtifactActions';
+import { FeatureAssociationSelect } from '@/components/FeatureAssociationSelect';
 import { createProjectTask } from '@/lib/projectTasks';
+import { linkFeatureArtifact } from '@/lib/projectFeatures';
 import { extractActionItemsFromMarkdown, isPlaceholderActionItem } from '@/lib/actionItems';
 import { PROJECT_TASK_MODULE_LABELS, ProjectTaskModule } from '@/types/project-tasks';
 import { OUTPUT_LANGUAGE_OPTIONS, OutputLanguage } from '@/types/output-language';
@@ -51,6 +53,7 @@ export default function MeetingIntelligence() {
   const [projectName, setProjectName] = useState('');
   const [participants, setParticipants] = useState('');
   const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('english');
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
 
   // Analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -281,6 +284,21 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
       setCurrentArtifactId(result.artifact_id ?? null);
       setActionItems(proposedActionItems);
       setSavedActionItemKeys(new Set());
+
+      if (selectedFeatureId && result.artifact_id) {
+        try {
+          await linkFeatureArtifact(activeProject.id, selectedFeatureId, result.artifact_id, 'source');
+        } catch (linkError: unknown) {
+          toast({
+            title: 'Feature link skipped',
+            description:
+              linkError instanceof Error
+                ? linkError.message
+                : 'The notes were saved, but could not be linked to the selected feature.',
+            variant: 'destructive',
+          });
+        }
+      }
 
       console.log('💾 [Database] Saving to project_artifacts table...');
       console.log('💾 [Database] Saved successfully');
@@ -758,6 +776,13 @@ const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('current');
                         onChange={(e) => setParticipants(e.target.value)}
                       />
                     </div>
+
+                    <FeatureAssociationSelect
+                      projectId={activeProject?.id}
+                      value={selectedFeatureId}
+                      onChange={setSelectedFeatureId}
+                      disabled={isAnalyzing}
+                    />
 
                     <Button
                       onClick={handleAnalyze}

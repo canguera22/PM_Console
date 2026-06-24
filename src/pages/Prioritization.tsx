@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 
 import { ArtifactActions } from '@/components/ArtifactActions';
 import { ErrorDisplay } from '@/components/ErrorDisplay';
+import { FeatureAssociationSelect } from '@/components/FeatureAssociationSelect';
 import { SessionHistoryCard } from '@/components/history/SessionHistoryCard';
 import { PageShell } from '@/components/PageShell';
 import { useActiveProject } from '@/contexts/ActiveProjectContext';
@@ -21,6 +22,7 @@ import { callAgentWithLogging, parseErrorMessage } from '@/lib/agent-logger';
 import { reviseArtifactWithAdvisor } from '@/lib/artifact-revision';
 import { DISCOVERY_OUTPUTS, DISCOVERY_TYPES } from '@/lib/discovery-definitions';
 import { fetchContextArtifacts, callPMAdvisorAgent, saveAdvisorReview } from '@/lib/pm-advisor';
+import { linkFeatureArtifact } from '@/lib/projectFeatures';
 import { generateDiscovery } from '@/lib/prioritization-agent';
 import { supabaseFetch } from '@/lib/supabase';
 import type { DiscoveryOutputType, DiscoveryRequestInput, DiscoveryType } from '@/types/discovery';
@@ -95,6 +97,7 @@ export default function Discovery() {
   const [signalFocus, setSignalFocus] = useState('');
   const [selectedOutputs, setSelectedOutputs] = useState<DiscoveryOutputType[]>(DEFAULT_OUTPUTS);
   const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>('english');
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
 
   const [sessions, setSessions] = useState<DiscoveryArtifactSession[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
@@ -283,6 +286,18 @@ export default function Discovery() {
       setActiveResultsTab('current');
       setAdvisorOutput('');
       setSearchParams(result.artifact_id ? { artifact: result.artifact_id } : {});
+      if (selectedFeatureId && result.artifact_id) {
+        try {
+          await linkFeatureArtifact(activeProject.id, selectedFeatureId, result.artifact_id, 'source');
+        } catch (linkError: unknown) {
+          toast.warning('Discovery brief generated, but feature linking failed', {
+            description:
+              linkError instanceof Error
+                ? linkError.message
+                : 'You can still link this artifact from the feature workspace.',
+          });
+        }
+      }
       await loadSessions();
       toast.success('Discovery brief generated');
     } catch (generationError: any) {
@@ -537,6 +552,13 @@ export default function Discovery() {
                     </Select>
                   </div>
                 </div>
+
+                <FeatureAssociationSelect
+                  projectId={activeProject?.id}
+                  value={selectedFeatureId}
+                  onChange={setSelectedFeatureId}
+                  disabled={isGenerating}
+                />
 
                 <div className="grid gap-2">
                   {DISCOVERY_OUTPUTS.map((output) => {
